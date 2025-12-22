@@ -1,36 +1,10 @@
-import ResourceCard from '@/components/ResourceCard'
 import SearchResources from './SearchResources'
+import { getServersDirect } from '@/lib/fivem'
 
-async function getResources() {
-  const res = await fetch('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
-    headers: { 'User-Agent': 'FiveM-Metrics/1.0' },
-    cache: 'no-store'
-  })
-  const text = await res.text()
-  const lines = text.split('\n').filter(l => l.trim())
-
-  const resourceMap = new Map<string, { name: string; servers: number; players: number }>()
-
-  for (const line of lines) {
-    try {
-      const s = JSON.parse(line)
-      if (s.Data) {
-        for (const r of s.Data.resources || []) {
-          if (!r || r.length < 2) continue
-          const existing = resourceMap.get(r) || { name: r, servers: 0, players: 0 }
-          existing.servers++
-          existing.players += s.Data.clients || 0
-          resourceMap.set(r, existing)
-        }
-      }
-    } catch {}
-  }
-
-  return Array.from(resourceMap.values()).sort((a, b) => b.servers - a.servers)
-}
+export const dynamic = 'force-dynamic'
 
 export default async function ResourcesPage() {
-  const resources = await getResources()
+  const { resources } = await getServersDirect()
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-12">

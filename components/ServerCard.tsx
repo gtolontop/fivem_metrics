@@ -2,23 +2,13 @@
 
 import Link from 'next/link'
 import { Users, Package } from 'lucide-react'
-
-interface Server {
-  id: string
-  name: string
-  players: number
-  maxPlayers: number
-  gametype?: string
-  resources?: string[]
-  vars?: Record<string, string>
-  icon?: string | null
-}
+import type { FiveMServer } from '@/lib/fivem'
 
 function clean(str: string) {
   return str.replace(/\^[0-9]/g, '').replace(/~[a-z]~/gi, '')
 }
 
-export default function ServerCard({ server }: { server: Server }) {
+export default function ServerCard({ server }: { server: FiveMServer }) {
   const pct = (server.players / server.maxPlayers) * 100
 
   return (

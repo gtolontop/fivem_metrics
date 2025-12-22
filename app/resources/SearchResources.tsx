@@ -3,14 +3,9 @@
 import { useState, useMemo } from 'react'
 import { Search } from 'lucide-react'
 import ResourceCard from '@/components/ResourceCard'
+import type { FiveMResource } from '@/lib/fivem'
 
-interface Resource {
-  name: string
-  servers: number
-  players: number
-}
-
-export default function SearchResources({ resources }: { resources: Resource[] }) {
+export default function SearchResources({ resources }: { resources: FiveMResource[] }) {
   const [search, setSearch] = useState('')
   const [limit, setLimit] = useState(100)
 

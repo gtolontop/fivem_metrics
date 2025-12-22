@@ -3,19 +3,9 @@
 import { useState, useMemo } from 'react'
 import { Search } from 'lucide-react'
 import ServerCard from '@/components/ServerCard'
+import type { FiveMServer } from '@/lib/fivem'
 
-interface Server {
-  id: string
-  name: string
-  players: number
-  maxPlayers: number
-  gametype?: string
-  resources?: string[]
-  vars?: Record<string, string>
-  icon?: string | null
-}
-
-export default function SearchServers({ servers }: { servers: Server[] }) {
+export default function SearchServers({ servers }: { servers: FiveMServer[] }) {
   const [search, setSearch] = useState('')
   const [limit, setLimit] = useState(50)
 

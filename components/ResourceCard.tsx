@@ -1,13 +1,8 @@
 import Link from 'next/link'
 import { Server, Users } from 'lucide-react'
+import type { FiveMResource } from '@/lib/fivem'
 
-interface Resource {
-  name: string
-  servers: number
-  players: number
-}
-
-export default function ResourceCard({ resource }: { resource: Resource }) {
+export default function ResourceCard({ resource }: { resource: FiveMResource }) {
   return (
     <Link
       href={`/resources/${encodeURIComponent(resource.name)}`}

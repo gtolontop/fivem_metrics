@@ -2,53 +2,12 @@ import { Server, Users, Package } from 'lucide-react'
 import Link from 'next/link'
 import ServerCard from '@/components/ServerCard'
 import ResourceCard from '@/components/ResourceCard'
+import { getServersDirect } from '@/lib/fivem'
 
-async function getData() {
-  const res = await fetch('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
-    headers: { 'User-Agent': 'FiveM-Metrics/1.0' },
-    cache: 'no-store'
-  })
-  const text = await res.text()
-  const lines = text.split('\n').filter(l => l.trim())
-
-  const servers: any[] = []
-  const resourceMap = new Map<string, { name: string; servers: number; players: number }>()
-
-  for (const line of lines) {
-    try {
-      const s = JSON.parse(line)
-      if (s.Data) {
-        servers.push({
-          id: s.EndPoint,
-          name: s.Data.hostname || 'Unknown',
-          players: s.Data.clients || 0,
-          maxPlayers: s.Data.sv_maxclients || 32,
-          gametype: s.Data.gametype || '',
-          resources: s.Data.resources || [],
-          vars: s.Data.vars || {},
-          icon: s.Data.icon || null,
-        })
-
-        for (const r of s.Data.resources || []) {
-          if (!r || r.length < 2) continue
-          const existing = resourceMap.get(r) || { name: r, servers: 0, players: 0 }
-          existing.servers++
-          existing.players += s.Data.clients || 0
-          resourceMap.set(r, existing)
-        }
-      }
-    } catch {}
-  }
-
-  servers.sort((a, b) => b.players - a.players)
-  const resources = Array.from(resourceMap.values()).sort((a, b) => b.servers - a.servers)
-  const totalPlayers = servers.reduce((sum, s) => sum + s.players, 0)
-
-  return { servers, resources, totalPlayers, totalServers: servers.length, totalResources: resources.length }
-}
+export const dynamic = 'force-dynamic'
 
 export default async function Home() {
-  const { servers, resources, totalPlayers, totalServers, totalResources } = await getData()
+  const { servers, resources, totalPlayers } = await getServersDirect()
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-16">
@@ -58,9 +17,9 @@ export default async function Home() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-16">
-        <Stat icon={<Server size={20} />} label="Servers" value={totalServers} />
+        <Stat icon={<Server size={20} />} label="Servers" value={servers.length} />
         <Stat icon={<Users size={20} />} label="Players Online" value={totalPlayers} />
-        <Stat icon={<Package size={20} />} label="Resources" value={totalResources} />
+        <Stat icon={<Package size={20} />} label="Resources" value={resources.length} />
       </div>
 
       <section className="mb-16">
@@ -79,7 +38,7 @@ export default async function Home() {
           <Link href="/resources" className="text-sm text-muted hover:text-white">View all</Link>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {resources.slice(0, 6).map((r, i) => <ResourceCard key={r.name} resource={r} />)}
+          {resources.slice(0, 6).map((r) => <ResourceCard key={r.name} resource={r} />)}
         </div>
       </section>
     </div>

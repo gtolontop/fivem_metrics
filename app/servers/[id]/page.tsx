@@ -1,35 +1,20 @@
 import Link from 'next/link'
-import { ArrowLeft, Users, Package, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Users, ExternalLink } from 'lucide-react'
 import CopyButton from './CopyButton'
+import { getServersDirect } from '@/lib/fivem'
+
+export const dynamic = 'force-dynamic'
 
 function clean(str: string) {
   return str.replace(/\^[0-9]/g, '').replace(/~[a-z]~/gi, '')
 }
 
-async function getServer(id: string) {
-  const res = await fetch(`https://servers-frontend.fivem.net/api/servers/single/${id}`, {
-    headers: { 'User-Agent': 'FiveM-Metrics/1.0' },
-    next: { revalidate: 30 }
-  })
-  const data = await res.json()
-  if (!data.Data) return null
-
-  return {
-    id: data.EndPoint || id,
-    name: data.Data.hostname || 'Unknown',
-    players: data.Data.clients || 0,
-    maxPlayers: data.Data.sv_maxclients || 32,
-    gametype: data.Data.gametype || '',
-    mapname: data.Data.mapname || '',
-    resources: data.Data.resources || [],
-    vars: data.Data.vars || {},
-    icon: data.Data.icon || null,
-  }
-}
-
 export default async function ServerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const server = await getServer(decodeURIComponent(id))
+  const serverId = decodeURIComponent(id)
+  const { servers } = await getServersDirect()
+
+  const server = servers.find(s => s.id === serverId)
 
   if (!server) {
     return (
