@@ -1,5 +1,3 @@
-import { decode } from '@msgpack/msgpack'
-
 export interface FiveMServer {
   id: string
   name: string
@@ -18,184 +16,361 @@ export interface FiveMResource {
   players: number
 }
 
-async function fetchServersRaw(): Promise<ArrayBuffer> {
-  const res = await fetch('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    },
-    cache: 'no-store',
-  })
-  return res.arrayBuffer()
+// Protobuf varint decoder
+function readVarint(buf: Uint8Array, offset: number): [number, number] {
+  let result = 0
+  let shift = 0
+  let pos = offset
+  while (pos < buf.length) {
+    const byte = buf[pos++]
+    result |= (byte & 0x7f) << shift
+    if ((byte & 0x80) === 0) break
+    shift += 7
+    if (shift > 35) break
+  }
+  return [result, pos]
 }
 
-function parseServerStream(buffer: ArrayBuffer): FiveMServer[] {
+// Read 32-bit little-endian integer
+function readUint32LE(buf: Uint8Array, offset: number): number {
+  return buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24)
+}
+
+// Parse the FiveM stream (4-byte length prefix + protobuf message, repeated)
+function parseServers(buffer: ArrayBuffer): FiveMServer[] {
   const servers: FiveMServer[] = []
   const data = new Uint8Array(buffer)
+  let pos = 0
 
-  let offset = 0
-  while (offset < data.length) {
+  while (pos + 4 < data.length) {
     try {
-      // Find msgpack map start (0x80-0x8f for fixmap, 0xde for map16, 0xdf for map32)
-      if (data[offset] === 0x7a || data[offset] === 0x0a) {
-        // Skip protobuf-like markers
-        offset++
-        continue
+      // Read 4-byte little-endian length
+      const len = readUint32LE(data, pos)
+      pos += 4
+
+      if (len <= 0 || len > 100000 || pos + len > data.length) {
+        break
       }
 
-      // Try to decode msgpack at current position
-      const slice = data.slice(offset)
-      try {
-        const decoded = decode(slice) as any
+      const messageData = data.slice(pos, pos + len)
+      const server = parseServerMessage(messageData)
 
-        if (decoded && typeof decoded === 'object') {
-          // Check if it looks like a server object
-          if (decoded.Data || decoded.hostname || decoded.clients !== undefined) {
-            const d = decoded.Data || decoded
-            servers.push({
-              id: decoded.EndPoint || d.sv_projectName || `server-${servers.length}`,
-              name: d.hostname || d.sv_projectName || 'Unknown',
-              players: d.clients || 0,
-              maxPlayers: d.sv_maxclients || 32,
-              gametype: d.gametype || '',
-              mapname: d.mapname || '',
-              resources: Array.isArray(d.resources) ? d.resources : [],
-              vars: d.vars || {},
-              icon: d.icon || null,
-            })
-          }
-        }
-
-        // Move to next entry (simplified - might skip some)
-        offset += 100
-      } catch {
-        offset++
+      if (server && server.name && server.name.length > 2) {
+        servers.push(server)
       }
+
+      pos += len
     } catch {
-      offset++
+      break
     }
   }
 
   return servers
 }
 
-// Alternative: Parse line by line looking for JSON-like structures
-function parseAlternative(text: string): FiveMServer[] {
-  const servers: FiveMServer[] = []
+function parseServerMessage(data: Uint8Array): FiveMServer | null {
+  let pos = 0
+  let endpoint = ''
+  let hostname = ''
+  let clients = 0
+  let maxClients = 32
+  let gametype = ''
+  let mapname = ''
+  const resources: string[] = []
+  let icon: string | null = null
+  const vars: Record<string, string> = {}
 
-  // Try to find hostname patterns and extract data
-  const hostnameRegex = /hostname["\s:]+([^\n\r]+)/g
-  const clientsRegex = /clients["\s:]+(\d+)/g
-  const resourcesRegex = /resources["\s:]+\[([^\]]+)\]/g
+  while (pos < data.length - 1) {
+    try {
+      const [tag, newPos] = readVarint(data, pos)
+      pos = newPos
+      if (pos >= data.length) break
 
-  let match
-  while ((match = hostnameRegex.exec(text)) !== null) {
-    // Very basic extraction
-    servers.push({
-      id: `server-${servers.length}`,
-      name: match[1].substring(0, 100),
-      players: 0,
-      maxPlayers: 32,
-      gametype: '',
-      mapname: '',
-      resources: [],
-      vars: {},
-      icon: null,
-    })
+      const fieldNum = tag >> 3
+      const wireType = tag & 0x7
+
+      if (wireType === 2) { // Length-delimited
+        const [len, lenPos] = readVarint(data, pos)
+        pos = lenPos
+
+        if (len <= 0 || pos + len > data.length) break
+
+        const fieldData = data.slice(pos, pos + len)
+
+        if (fieldNum === 1) {
+          // EndPoint
+          endpoint = new TextDecoder().decode(fieldData)
+        } else if (fieldNum === 2) {
+          // Data message - parse nested
+          const nested = parseDataMessage(fieldData)
+          hostname = nested.hostname || hostname
+          clients = nested.clients || clients
+          maxClients = nested.maxClients || maxClients
+          gametype = nested.gametype || gametype
+          mapname = nested.mapname || mapname
+          if (nested.resources.length > 0) {
+            resources.push(...nested.resources)
+          }
+          icon = nested.icon || icon
+          Object.assign(vars, nested.vars)
+        }
+
+        pos += len
+      } else if (wireType === 0) { // Varint
+        const [, valPos] = readVarint(data, pos)
+        pos = valPos
+      } else if (wireType === 5) { // 32-bit
+        pos += 4
+      } else if (wireType === 1) { // 64-bit
+        pos += 8
+      } else {
+        break
+      }
+    } catch {
+      break
+    }
   }
 
-  return servers
+  if (!endpoint && !hostname) return null
+
+  // Use sv_projectName from vars if available, otherwise use hostname
+  const displayName = vars['sv_projectName'] || hostname || endpoint
+
+  return {
+    id: endpoint,
+    name: displayName,
+    players: clients,
+    maxPlayers: maxClients || 32,
+    gametype,
+    mapname,
+    resources,
+    vars,
+    icon
+  }
 }
 
-export async function getServers(): Promise<FiveMServer[]> {
+function parseDataMessage(data: Uint8Array): {
+  hostname: string
+  clients: number
+  maxClients: number
+  gametype: string
+  mapname: string
+  resources: string[]
+  icon: string | null
+  vars: Record<string, string>
+} {
+  let pos = 0
+  let hostname = ''
+  let clients = 0
+  let maxClients = 32
+  let gametype = ''
+  let mapname = ''
+  const resources: string[] = []
+  let icon: string | null = null
+  const vars: Record<string, string> = {}
+
+  while (pos < data.length - 1) {
+    try {
+      const [tag, newPos] = readVarint(data, pos)
+      pos = newPos
+      if (pos >= data.length) break
+
+      const fieldNum = tag >> 3
+      const wireType = tag & 0x7
+
+      if (wireType === 2) { // Length-delimited
+        const [len, lenPos] = readVarint(data, pos)
+        pos = lenPos
+
+        if (len <= 0 || pos + len > data.length) break
+
+        const fieldData = data.slice(pos, pos + len)
+
+        try {
+          if (fieldNum === 4) {
+            // Hostname (raw description)
+            hostname = new TextDecoder().decode(fieldData)
+          } else if (fieldNum === 5) {
+            // Gametype
+            gametype = new TextDecoder().decode(fieldData)
+          } else if (fieldNum === 6) {
+            // Mapname
+            mapname = new TextDecoder().decode(fieldData)
+          } else if (fieldNum === 12) {
+            // Vars - nested key-value
+            const varEntry = parseVarEntry(fieldData)
+            if (varEntry) {
+              vars[varEntry.key] = varEntry.value
+            }
+          } else if (fieldNum === 14) {
+            // Resources
+            const resName = new TextDecoder().decode(fieldData)
+            if (resName.length > 1 && resName.length < 100 && !resName.includes('\x00')) {
+              resources.push(resName)
+            }
+          } else if (fieldNum === 17) {
+            // Icon
+            const iconStr = new TextDecoder().decode(fieldData)
+            if (iconStr.startsWith('data:image')) {
+              icon = iconStr
+            }
+          }
+        } catch {
+          // Skip invalid text
+        }
+
+        pos += len
+      } else if (wireType === 0) { // Varint
+        const [val, valPos] = readVarint(data, pos)
+        pos = valPos
+
+        if (fieldNum === 1) clients = val
+        if (fieldNum === 2) maxClients = val
+      } else if (wireType === 5) { // 32-bit
+        pos += 4
+      } else if (wireType === 1) { // 64-bit
+        pos += 8
+      } else {
+        break
+      }
+    } catch {
+      break
+    }
+  }
+
+  return { hostname, clients, maxClients, gametype, mapname, resources, icon, vars }
+}
+
+function parseVarEntry(data: Uint8Array): { key: string; value: string } | null {
+  let pos = 0
+  let key = ''
+  let value = ''
+
+  while (pos < data.length - 1) {
+    try {
+      const [tag, newPos] = readVarint(data, pos)
+      pos = newPos
+      if (pos >= data.length) break
+
+      const fieldNum = tag >> 3
+      const wireType = tag & 0x7
+
+      if (wireType === 2) {
+        const [len, lenPos] = readVarint(data, pos)
+        pos = lenPos
+
+        if (len <= 0 || pos + len > data.length) break
+
+        const str = new TextDecoder().decode(data.slice(pos, pos + len))
+        if (fieldNum === 1) key = str
+        if (fieldNum === 2) value = str
+        pos += len
+      } else {
+        break
+      }
+    } catch {
+      break
+    }
+  }
+
+  return key ? { key, value } : null
+}
+
+// Strip FiveM color codes (^0, ^1, etc.)
+function stripColorCodes(str: string): string {
+  return str.replace(/\^[0-9]/g, '').trim()
+}
+
+// Slim server interface for client-side display
+export interface FiveMServerSlim {
+  id: string
+  name: string
+  players: number
+  maxPlayers: number
+  gametype: string
+  mapname: string
+  tags: string
+}
+
+export async function getServersDirect(): Promise<{
+  servers: FiveMServerSlim[]
+  resources: FiveMResource[]
+  totalPlayers: number
+  totalServers: number
+}> {
   try {
-    // Try the JSON endpoint first (older format)
-    const jsonRes = await fetch('https://servers-frontend.fivem.net/api/servers/', {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
+    const res = await fetch('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      redirect: 'follow',
       cache: 'no-store',
     })
 
-    if (jsonRes.ok) {
-      const contentType = jsonRes.headers.get('content-type')
-      if (contentType?.includes('application/json')) {
-        const data = await jsonRes.json()
-        if (Array.isArray(data)) {
-          return data.map((s: any) => ({
-            id: s.EndPoint || s.addr,
-            name: s.Data?.hostname || s.hostname || 'Unknown',
-            players: s.Data?.clients || s.clients || 0,
-            maxPlayers: s.Data?.sv_maxclients || s.sv_maxclients || 32,
-            gametype: s.Data?.gametype || s.gametype || '',
-            mapname: s.Data?.mapname || s.mapname || '',
-            resources: s.Data?.resources || s.resources || [],
-            vars: s.Data?.vars || s.vars || {},
-            icon: s.Data?.icon || s.icon || null,
-          }))
-        }
+    if (!res.ok) {
+      console.error('FiveM API error:', res.status)
+      return { servers: [], resources: [], totalPlayers: 0, totalServers: 0 }
+    }
+
+    const buffer = await res.arrayBuffer()
+    console.log('Received', buffer.byteLength, 'bytes')
+
+    const allServers = parseServers(buffer)
+    console.log('Parsed', allServers.length, 'servers')
+
+    // Sort by players
+    allServers.sort((a, b) => b.players - a.players)
+
+    // Calculate totals
+    let totalPlayers = 0
+    const resourceMap = new Map<string, FiveMResource>()
+
+    for (const server of allServers) {
+      totalPlayers += server.players
+      for (const r of server.resources) {
+        if (!r || r.length < 2) continue
+        const existing = resourceMap.get(r) || { name: r, servers: 0, players: 0 }
+        existing.servers++
+        existing.players += server.players
+        resourceMap.set(r, existing)
       }
     }
-  } catch (e) {
-    console.error('JSON endpoint failed:', e)
-  }
 
-  // Fallback: return empty for now, we'll use mock data
-  console.log('FiveM API not accessible, using fallback')
-  return []
-}
+    const resources = Array.from(resourceMap.values())
+      .sort((a, b) => b.servers - a.servers)
+      .slice(0, 100)
 
-export async function getServersDirect(): Promise<{ servers: FiveMServer[], resources: FiveMResource[], totalPlayers: number }> {
-  const servers = await getServers()
-
-  // If API failed, return sample data
-  if (servers.length === 0) {
-    return getSampleData()
-  }
-
-  servers.sort((a, b) => b.players - a.players)
-
-  const resourceMap = new Map<string, FiveMResource>()
-  let totalPlayers = 0
-
-  for (const server of servers) {
-    totalPlayers += server.players
-    for (const r of server.resources) {
-      if (!r || r.length < 2) continue
-      const existing = resourceMap.get(r) || { name: r, servers: 0, players: 0 }
-      existing.servers++
-      existing.players += server.players
-      resourceMap.set(r, existing)
+    // Create clean server objects using JSON parse/stringify to ensure no circular refs
+    const cleanServers: FiveMServerSlim[] = []
+    for (let i = 0; i < Math.min(100, allServers.length); i++) {
+      const s = allServers[i]
+      cleanServers.push({
+        id: String(s.id || '').slice(0, 20),
+        name: stripColorCodes(String(s.name || '')).slice(0, 100),
+        players: Number(s.players) || 0,
+        maxPlayers: Number(s.maxPlayers) || 32,
+        gametype: String(s.gametype || '').slice(0, 50),
+        mapname: String(s.mapname || '').slice(0, 50),
+        tags: String(s.vars?.tags || '').slice(0, 200)
+      })
     }
+
+    // Deep clone to ensure no references to parsed objects
+    const servers = JSON.parse(JSON.stringify(cleanServers)) as FiveMServerSlim[]
+    const cleanResources = JSON.parse(JSON.stringify(resources)) as FiveMResource[]
+
+    console.log('Total players:', totalPlayers)
+    console.log('Unique resources:', cleanResources.length)
+    console.log('Returning', servers.length, 'servers')
+
+    return {
+      servers,
+      resources: cleanResources,
+      totalPlayers,
+      totalServers: allServers.length
+    }
+  } catch (e) {
+    console.error('Failed to fetch FiveM data:', e)
+    return { servers: [], resources: [], totalPlayers: 0, totalServers: 0 }
   }
-
-  const resources = Array.from(resourceMap.values()).sort((a, b) => b.servers - a.servers)
-
-  return { servers, resources, totalPlayers }
-}
-
-function getSampleData(): { servers: FiveMServer[], resources: FiveMResource[], totalPlayers: number } {
-  // Sample data when API is not accessible
-  const servers: FiveMServer[] = [
-    { id: 'eclipse-rp', name: 'Eclipse Roleplay', players: 892, maxPlayers: 1000, gametype: 'Roleplay', mapname: 'Los Santos', resources: ['es_extended', 'esx_menu_default', 'mysql-async'], vars: { tags: 'Roleplay,Serious,Economy' }, icon: null },
-    { id: 'nopixel', name: 'NoPixel Inspired', players: 756, maxPlayers: 800, gametype: 'Roleplay', mapname: 'Los Santos', resources: ['qb-core', 'qb-inventory', 'qb-phone'], vars: { tags: 'Roleplay,Whitelist' }, icon: null },
-    { id: 'ls-underground', name: 'Los Santos Underground', players: 623, maxPlayers: 700, gametype: 'Roleplay', mapname: 'Los Santos', resources: ['vrp', 'vrp_inventory'], vars: { tags: 'Roleplay,Gang,PvP' }, icon: null },
-    { id: 'racing-league', name: 'FiveM Racing League', players: 445, maxPlayers: 500, gametype: 'Racing', mapname: 'Los Santos', resources: ['racing_core', 'custom_cars'], vars: { tags: 'Racing,Drift' }, icon: null },
-    { id: 'gta-remastered', name: 'GTA Online Remastered', players: 398, maxPlayers: 500, gametype: 'Freeroam', mapname: 'Los Santos', resources: ['es_extended', 'esx_banking'], vars: { tags: 'Freeroam,Economy' }, icon: null },
-    { id: 'midnight-club', name: 'Midnight Club RP', players: 367, maxPlayers: 400, gametype: 'Racing RP', mapname: 'Los Santos', resources: ['qb-core', 'qb-racing'], vars: { tags: 'Racing,Roleplay' }, icon: null },
-  ]
-
-  const resources: FiveMResource[] = [
-    { name: 'es_extended', servers: 4523, players: 89432 },
-    { name: 'qb-core', servers: 3892, players: 72156 },
-    { name: 'mysql-async', servers: 6721, players: 124532 },
-    { name: 'oxmysql', servers: 4156, players: 67843 },
-    { name: 'ox_lib', servers: 3654, players: 58921 },
-    { name: 'ox_inventory', servers: 2987, players: 45632 },
-    { name: 'qb-inventory', servers: 2654, players: 41235 },
-    { name: 'pma-voice', servers: 3456, players: 52341 },
-    { name: 'dpemotes', servers: 2876, players: 43567 },
-    { name: 'vMenu', servers: 1987, players: 28765 },
-  ]
-
-  const totalPlayers = servers.reduce((sum, s) => sum + s.players, 0)
-
-  return { servers, resources, totalPlayers }
 }
