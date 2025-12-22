@@ -2,7 +2,7 @@
 // Uses direct server hits - NO RATE LIMIT!
 
 import { addScannedServer, getScannedCount, getCache } from './cache'
-import { isRedisEnabled, getIpMappingsFromRedis, saveResourcesToRedis } from './redis'
+import { isRedisEnabled, getIpMappingsFromRedis, saveResourcesToRedis, addScannedServerToRedis, getScannedServerCount } from './redis'
 
 interface ScanResult {
   serverId: string
@@ -93,9 +93,19 @@ export async function runScan(): Promise<{
         if (result.online) {
           online++
           addScannedServer(result.serverId, result.resources, result.players)
+          // Mark as scanned in Redis (persists!)
+          if (isRedisEnabled()) {
+            addScannedServerToRedis(result.serverId).catch(() => {})
+          }
           result.resources.forEach(r => allResources.add(r))
         }
       }
+    }
+
+    // Save resources to Redis
+    if (isRedisEnabled() && allResources.size > 0) {
+      const cache = getCache()
+      await saveResourcesToRedis(cache.resources)
     }
 
     lastScanTime = Date.now()

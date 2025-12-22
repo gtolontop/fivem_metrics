@@ -3,7 +3,8 @@ import { getCache, getScannedCount, getIpMappingCount as getLocalIpCount } from 
 import {
   isRedisEnabled,
   getRedisStats,
-  getOnlineServerCount
+  getOnlineServerCount,
+  getScannedServerCount
 } from '@/lib/redis'
 import { getScanStatus } from '@/lib/background-scanner'
 import { getCollectorStatus } from '@/lib/ip-collector'
