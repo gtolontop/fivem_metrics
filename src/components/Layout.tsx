@@ -1,12 +1,15 @@
 import { ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import Navbar from './Navbar'
+import { useStats } from '../hooks/useStats'
 
 interface LayoutProps {
   children: ReactNode
 }
 
 export default function Layout({ children }: LayoutProps) {
+  const { stats } = useStats()
+
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
@@ -25,7 +28,11 @@ export default function Layout({ children }: LayoutProps) {
               FiveM Metrics
             </p>
             <p className="text-muted text-sm">
-              Tracking {new Intl.NumberFormat().format(12847)} servers worldwide
+              {stats ? (
+                <>Tracking {stats.totalServers.toLocaleString()} servers worldwide</>
+              ) : (
+                <>Loading...</>
+              )}
             </p>
           </div>
         </div>

@@ -1,12 +1,30 @@
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Server, Users, Package, TrendingUp, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Server, Users, Package, ExternalLink, Loader2 } from 'lucide-react'
 import ServerCard from '../components/ServerCard'
-import { resources, servers } from '../data/mockData'
+import { useResources } from '../hooks/useResources'
+import { useServers } from '../hooks/useServers'
 
 export default function ResourceDetail() {
   const { name } = useParams()
-  const resource = resources.find(r => r.name === name)
+  const { resources, loading: loadingResources } = useResources()
+  const { servers, loading: loadingServers } = useServers()
+
+  const decodedName = name ? decodeURIComponent(name) : ''
+  const resource = resources.find(r => r.name === decodedName)
+  const serversWithResource = servers.filter(s =>
+    s.resources?.includes(decodedName)
+  ).slice(0, 12)
+
+  if (loadingResources || loadingServers) {
+    return (
+      <div className="max-w-7xl mx-auto px-6 py-12">
+        <div className="flex justify-center py-20">
+          <Loader2 className="w-10 h-10 text-muted animate-spin" />
+        </div>
+      </div>
+    )
+  }
 
   if (!resource) {
     return (
@@ -20,8 +38,6 @@ export default function ResourceDetail() {
       </div>
     )
   }
-
-  const serversWithResource = servers.filter(s => s.resources.includes(resource.name))
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-12">
@@ -53,71 +69,44 @@ export default function ResourceDetail() {
               <Package size={32} className="text-secondary" />
             </div>
             <div>
-              <div className="flex items-center gap-3 mb-1">
-                <h1 className="text-2xl md:text-3xl font-semibold text-primary">
-                  {resource.displayName}
-                </h1>
-                {resource.trending && (
-                  <span className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-accent bg-accent/10 rounded-full">
-                    <TrendingUp size={14} />
-                    Trending
-                  </span>
-                )}
-              </div>
-              <p className="text-muted font-mono text-sm">{resource.name}</p>
-              {resource.author && (
-                <p className="text-secondary text-sm mt-2">
-                  by <span className="text-primary">{resource.author}</span>
-                </p>
-              )}
+              <h1 className="text-2xl md:text-3xl font-semibold text-primary font-mono">
+                {resource.name}
+              </h1>
             </div>
           </div>
-
-          {resource.version && (
-            <span className="text-sm text-muted font-mono bg-surface px-3 py-1.5 rounded-lg border border-border self-start">
-              v{resource.version}
-            </span>
-          )}
         </div>
-
-        {resource.description && (
-          <p className="text-secondary mt-6 text-lg">
-            {resource.description}
-          </p>
-        )}
       </motion.div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        {[
-          {
-            icon: <Server size={20} />,
-            label: 'Servers Using',
-            value: resource.serverCount.toLocaleString(),
-          },
-          {
-            icon: <Users size={20} />,
-            label: 'Total Players',
-            value: resource.totalPlayers.toLocaleString(),
-          },
-          {
-            icon: <Package size={20} />,
-            label: 'Category',
-            value: resource.category,
-          },
-        ].map((stat, index) => (
-          <motion.div
-            key={stat.label}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.1 + index * 0.05 }}
-            className="glass rounded-xl p-6"
-          >
-            <div className="text-muted mb-3">{stat.icon}</div>
-            <p className="text-sm text-muted mb-1">{stat.label}</p>
-            <p className="text-2xl font-semibold text-primary">{stat.value}</p>
-          </motion.div>
-        ))}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.1 }}
+          className="glass rounded-xl p-6"
+        >
+          <div className="text-muted mb-3">
+            <Server size={20} />
+          </div>
+          <p className="text-sm text-muted mb-1">Servers Using</p>
+          <p className="text-3xl font-semibold text-primary">
+            {resource.serverCount.toLocaleString()}
+          </p>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.15 }}
+          className="glass rounded-xl p-6"
+        >
+          <div className="text-muted mb-3">
+            <Users size={20} />
+          </div>
+          <p className="text-sm text-muted mb-1">Total Players</p>
+          <p className="text-3xl font-semibold text-primary">
+            {resource.totalPlayers.toLocaleString()}
+          </p>
+        </motion.div>
       </div>
 
       {/* Links */}
@@ -130,7 +119,7 @@ export default function ResourceDetail() {
         <h2 className="text-sm font-medium text-muted mb-4">Links</h2>
         <div className="flex flex-wrap gap-3">
           <a
-            href={`https://github.com/search?q=${resource.name}`}
+            href={`https://github.com/search?q=${encodeURIComponent(resource.name)}&type=repositories`}
             target="_blank"
             rel="noopener noreferrer"
             className="btn-secondary inline-flex items-center gap-2"
@@ -139,7 +128,7 @@ export default function ResourceDetail() {
             GitHub
           </a>
           <a
-            href={`https://forum.cfx.re/search?q=${resource.name}`}
+            href={`https://forum.cfx.re/search?q=${encodeURIComponent(resource.name)}`}
             target="_blank"
             rel="noopener noreferrer"
             className="btn-secondary inline-flex items-center gap-2"
@@ -158,11 +147,11 @@ export default function ResourceDetail() {
           transition={{ duration: 0.4, delay: 0.3 }}
         >
           <h2 className="text-lg font-medium text-primary mb-4">
-            Servers using {resource.displayName}
+            Servers using {resource.name}
           </h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             {serversWithResource.map((server, index) => (
-              <ServerCard key={server.id} server={server} index={index} />
+              <ServerCard key={server.endpoint || index} server={server} index={index} />
             ))}
           </div>
         </motion.div>
