@@ -1,5 +1,11 @@
 # Déploiement sur Railway
 
+## Prérequis Railway
+
+1. **Redis** (gratuit sur Railway)
+2. **App principale** (1 instance)
+3. **Workers** (10-50 instances)
+
 ## Architecture
 
 ```
@@ -19,15 +25,23 @@
 └───────┘  └───────┘  └───────┘
 ```
 
-## Étape 1: Déployer l'App Principale
+## Étape 1: Créer Redis
 
-1. Crée un nouveau projet sur Railway
-2. Connecte ton repo GitHub
-3. Railway va auto-détecter le Dockerfile
-4. Variables d'environnement: aucune requise
-5. Note l'URL: `https://ton-app.railway.app`
+1. Dans Railway: "New Project" → "Provision Redis"
+2. Clique sur Redis → Variables
+3. Copie `REDIS_URL` (genre `redis://default:xxx@xxx.railway.app:6379`)
 
-## Étape 2: Déployer les Workers
+## Étape 2: Déployer l'App Principale
+
+1. Dans le même projet: "New Service" → GitHub repo
+2. Railway va auto-détecter le Dockerfile
+3. Variables d'environnement:
+   ```
+   REDIS_URL=redis://default:xxx@xxx.railway.app:6379
+   ```
+4. Note l'URL: `https://ton-app.railway.app`
+
+## Étape 3: Déployer les Workers
 
 ### Option A: Via Railway (recommandé)
 

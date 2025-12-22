@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCache, getIpMappingCount } from '@/lib/cache'
+import { isRedisEnabled, getIpMappingsFromRedis, getIpMappingCount as getRedisIpCount } from '@/lib/redis'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,13 +25,26 @@ export async function GET(request: Request) {
       serverIds: [],
       message: 'No servers in cache. Call /api/data first.',
       total: 0,
-      processed: getIpMappingCount()
+      processed: 0
     })
+  }
+
+  // Get existing IP mappings (from Redis or local cache)
+  let existingIps: Set<string>
+  let processedCount: number
+
+  if (isRedisEnabled()) {
+    const redisIps = await getIpMappingsFromRedis()
+    existingIps = new Set(redisIps.keys())
+    processedCount = await getRedisIpCount()
+  } else {
+    existingIps = new Set(cache.ipMappings.keys())
+    processedCount = getIpMappingCount()
   }
 
   // Get servers without IP that aren't being processed
   const needIp = cache.servers
-    .filter(s => !cache.ipMappings.has(s.id) && !processing.has(s.id))
+    .filter(s => !existingIps.has(s.id) && !processing.has(s.id))
     .slice(0, BATCH_SIZE)
 
   // Mark as processing
@@ -46,8 +60,9 @@ export async function GET(request: Request) {
     workerId,
     batchSize: needIp.length,
     total: cache.servers.length,
-    processed: getIpMappingCount(),
-    remaining: cache.servers.length - getIpMappingCount(),
-    progress: Math.round((getIpMappingCount() / cache.servers.length) * 100)
+    processed: processedCount,
+    remaining: cache.servers.length - processedCount,
+    progress: Math.round((processedCount / cache.servers.length) * 100),
+    storage: isRedisEnabled() ? 'redis' : 'file'
   })
 }
