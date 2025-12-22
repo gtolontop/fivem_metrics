@@ -5,11 +5,22 @@ import {
   getRedisStats,
   getOnlineServerCount
 } from '@/lib/redis'
+import { getScanStatus, startBackgroundScanner } from '@/lib/background-scanner'
 
 export const dynamic = 'force-dynamic'
 
+// Ensure background scanner starts on first status check
+let bgStarted = false
+
 export async function GET() {
+  // Start background scanner if not already started
+  if (!bgStarted) {
+    startBackgroundScanner()
+    bgStarted = true
+  }
+
   const cache = getCache()
+  const bgStatus = getScanStatus()
 
   // Get stats from Redis or local
   let ipCount: number
@@ -47,13 +58,16 @@ export async function GET() {
     resources: {
       total: cache.resources.length
     },
-    // Estimation du temps restant
+    backgroundScanner: {
+      running: bgStatus.isScanning,
+      lastScan: bgStatus.lastScanTime > 0 ? new Date(bgStatus.lastScanTime).toISOString() : null,
+      serversWithIp: bgStatus.serversWithIp
+    },
     estimate: {
       needIp: totalServers - ipCount,
       needScan: ipCount - scannedCount,
-      // Avec 50 workers, ~150 IPs chacun par run
       workersNeeded: Math.ceil((totalServers - ipCount) / 150),
-      runsNeeded: Math.ceil((totalServers - ipCount) / 7500) // 50 workers x 150
+      runsNeeded: Math.ceil((totalServers - ipCount) / 7500)
     },
     lastUpdate: new Date(cache.lastUpdate).toISOString()
   })
