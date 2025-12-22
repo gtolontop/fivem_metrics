@@ -26,6 +26,9 @@ async function refreshData() {
   }
 }
 
+// Only send top 100 servers to UI, but cache all 32K+ for scanning
+const UI_SERVER_LIMIT = 100
+
 export async function GET() {
   const cache = getCache()
 
@@ -35,8 +38,8 @@ export async function GET() {
     refreshData()
 
     return NextResponse.json({
-      servers: cache.servers,
-      resources: cache.resources,
+      servers: cache.servers.slice(0, UI_SERVER_LIMIT),
+      resources: cache.resources.slice(0, 100),
       totalPlayers: cache.totalPlayers,
       totalServers: cache.totalServers,
       cached: true,
@@ -56,8 +59,8 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      servers,
-      resources,
+      servers: servers.slice(0, UI_SERVER_LIMIT),
+      resources: resources.slice(0, 100),
       totalPlayers,
       totalServers,
       cached: false
@@ -68,8 +71,8 @@ export async function GET() {
     // Return cached data if available, even if stale
     if (cache.servers.length > 0) {
       return NextResponse.json({
-        servers: cache.servers,
-        resources: cache.resources,
+        servers: cache.servers.slice(0, UI_SERVER_LIMIT),
+        resources: cache.resources.slice(0, 100),
         totalPlayers: cache.totalPlayers,
         totalServers: cache.totalServers,
         cached: true,

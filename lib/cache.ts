@@ -1,4 +1,5 @@
 import { FiveMResource, FiveMServerSlim } from './fivem'
+import { loadIpMappings, saveIpMappings } from './ip-store'
 
 interface CacheData {
   servers: FiveMServerSlim[]
@@ -9,8 +10,9 @@ interface CacheData {
   lastUpdate: number
   lastResourceScan: number
   scannedServerIds: Set<string>
-  // cfx ID -> real IP mapping (builds up over time)
+  // cfx ID -> real IP mapping (builds up over time, persisted to disk)
   ipMappings: Map<string, string>
+  ipMappingsLoaded: boolean
 }
 
 // Use globalThis to persist cache across Next.js hot reloads
@@ -26,11 +28,25 @@ if (!globalCache.__fivemCache) {
     lastUpdate: 0,
     lastResourceScan: 0,
     scannedServerIds: new Set(),
-    ipMappings: new Map()
+    ipMappings: new Map(),
+    ipMappingsLoaded: false
   }
 }
 
 const cache = globalCache.__fivemCache
+
+// Load IP mappings from disk on first access
+function ensureIpMappingsLoaded() {
+  if (!cache.ipMappingsLoaded) {
+    try {
+      cache.ipMappings = loadIpMappings()
+      cache.ipMappingsLoaded = true
+    } catch {
+      // File operations may fail in edge runtime, use empty map
+      cache.ipMappingsLoaded = true
+    }
+  }
+}
 
 const CACHE_TTL = 60 * 1000 // 1 minute for server list
 const RESOURCE_SCAN_INTERVAL = 5 * 1000 // 5 seconds between scan batches
@@ -105,25 +121,51 @@ export function resetScan(): void {
   cache.lastResourceScan = 0
 }
 
-// IP mapping functions
+// IP mapping functions (with disk persistence)
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+
 export function setIpMapping(cfxId: string, realIp: string): void {
+  ensureIpMappingsLoaded()
   cache.ipMappings.set(cfxId, realIp)
+
+  // Debounced save to disk
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    try {
+      saveIpMappings(cache.ipMappings)
+    } catch {
+      // Ignore save errors
+    }
+  }, 5000) // Save 5 seconds after last update
 }
 
 export function getIpMapping(cfxId: string): string | undefined {
+  ensureIpMappingsLoaded()
   return cache.ipMappings.get(cfxId)
 }
 
 export function getIpMappingCount(): number {
+  ensureIpMappingsLoaded()
   return cache.ipMappings.size
 }
 
 export function getServersWithoutIp(): FiveMServerSlim[] {
+  ensureIpMappingsLoaded()
   return cache.servers.filter(s => !cache.ipMappings.has(s.id))
 }
 
 export function getServersWithIp(): Array<{ server: FiveMServerSlim, ip: string }> {
+  ensureIpMappingsLoaded()
   return cache.servers
     .filter(s => cache.ipMappings.has(s.id))
     .map(s => ({ server: s, ip: cache.ipMappings.get(s.id)! }))
+}
+
+// Force save IP mappings
+export function forceSaveIpMappings(): void {
+  try {
+    saveIpMappings(cache.ipMappings)
+  } catch {
+    // Ignore
+  }
 }

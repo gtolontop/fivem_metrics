@@ -4,7 +4,7 @@ import { getCache, setIpMapping, getIpMappingCount, getServersWithoutIp } from '
 export const dynamic = 'force-dynamic'
 
 // Build up IP mappings by fetching from FiveM API (rate limited, do slowly)
-const BATCH_SIZE = 3 // Small batch to avoid rate limit
+const BATCH_SIZE = 10 // Increased batch - some will fail but we get more
 
 export async function GET() {
   const cache = getCache()

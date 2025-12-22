@@ -430,36 +430,27 @@ export async function getServersDirect(): Promise<{
 
     const resources = Array.from(resourceMap.values())
       .sort((a, b) => b.servers - a.servers)
-      .slice(0, 100)
 
-    // Create clean server objects using JSON parse/stringify to ensure no circular refs
-    const cleanServers: FiveMServerSlim[] = []
-    for (let i = 0; i < Math.min(100, allServers.length); i++) {
-      const s = allServers[i]
-      cleanServers.push({
-        id: String(s.id || '').slice(0, 20),
-        name: stripColorCodes(String(s.name || '')).slice(0, 100),
-        players: Number(s.players) || 0,
-        maxPlayers: Number(s.maxPlayers) || 32,
-        gametype: String(s.gametype || '').slice(0, 50),
-        mapname: String(s.mapname || '').slice(0, 50),
-        tags: String(s.vars?.tags || '').slice(0, 200)
-      })
-    }
-
-    // Deep clone to ensure no references to parsed objects
-    const servers = JSON.parse(JSON.stringify(cleanServers)) as FiveMServerSlim[]
-    const cleanResources = JSON.parse(JSON.stringify(resources)) as FiveMResource[]
+    // Create clean server objects for ALL servers
+    const cleanServers: FiveMServerSlim[] = allServers.map(s => ({
+      id: String(s.id || '').slice(0, 50),
+      name: stripColorCodes(String(s.name || '')).slice(0, 100),
+      players: Number(s.players) || 0,
+      maxPlayers: Number(s.maxPlayers) || 32,
+      gametype: String(s.gametype || '').slice(0, 50),
+      mapname: String(s.mapname || '').slice(0, 50),
+      tags: String(s.vars?.tags || '').slice(0, 200)
+    }))
 
     console.log('Total players:', totalPlayers)
-    console.log('Unique resources:', cleanResources.length)
-    console.log('Returning', servers.length, 'servers')
+    console.log('Unique resources:', resources.length)
+    console.log('Returning ALL', cleanServers.length, 'servers')
 
     return {
-      servers,
-      resources: cleanResources,
+      servers: cleanServers,
+      resources,
       totalPlayers,
-      totalServers: allServers.length
+      totalServers: cleanServers.length
     }
   } catch (e) {
     console.error('Failed to fetch FiveM data:', e)

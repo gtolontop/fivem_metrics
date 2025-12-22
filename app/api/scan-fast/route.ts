@@ -11,7 +11,7 @@ import {
 export const dynamic = 'force-dynamic'
 
 // Fast scan - hit servers directly using cached IP mappings
-const BATCH_SIZE = 50 // Can go fast since no central rate limit!
+const BATCH_SIZE = 100 // Can go fast since no central rate limit!
 
 export async function GET() {
   const cache = getCache()
