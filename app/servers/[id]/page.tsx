@@ -3,32 +3,25 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { ArrowLeft, Users, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Users, ExternalLink, Package, Server } from 'lucide-react'
 import CopyButton from './CopyButton'
-import type { FiveMServerSlim } from '@/lib/fivem'
-
-interface Data {
-  servers: FiveMServerSlim[]
-}
+import type { FiveMServerFull } from '@/lib/fivem'
 
 export default function ServerPage() {
   const params = useParams()
   const id = decodeURIComponent(params.id as string)
-  const [server, setServer] = useState<FiveMServerSlim | null>(null)
+  const [server, setServer] = useState<FiveMServerFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
 
   useEffect(() => {
-    fetch('/api/data')
-      .then(res => res.json())
-      .then((data: Data) => {
-        const found = data.servers.find(s => s.id === id)
-        if (found) {
-          setServer(found)
-        } else {
-          setNotFound(true)
-        }
+    fetch(`/api/server/${encodeURIComponent(id)}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Not found')
+        return res.json()
       })
+      .then(setServer)
+      .catch(() => setNotFound(true))
       .finally(() => setLoading(false))
   }, [id])
 
@@ -38,7 +31,10 @@ export default function ServerPage() {
         <Link href="/servers" className="inline-flex items-center gap-2 text-muted hover:text-white mb-8 transition-colors">
           <ArrowLeft size={18} /> Back
         </Link>
-        <p className="text-muted">Loading...</p>
+        <div className="bg-card border border-border rounded-xl p-8 animate-pulse">
+          <div className="h-8 bg-bg rounded w-1/3 mb-4"></div>
+          <div className="h-4 bg-bg rounded w-1/4"></div>
+        </div>
       </div>
     )
   }
@@ -97,18 +93,36 @@ export default function ServerPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-        <Stat label="Players" value={`${server.players.toLocaleString()}/${server.maxPlayers}`} />
-        <Stat label="Gamemode" value={server.gametype || 'N/A'} />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <Stat icon={<Users size={16} />} label="Players" value={`${server.players.toLocaleString()}/${server.maxPlayers}`} />
+        <Stat icon={<Server size={16} />} label="Gamemode" value={server.gametype || 'N/A'} />
+        <Stat icon={<Package size={16} />} label="Resources" value={server.resources.length} />
         <Stat label="Map" value={server.mapname || 'N/A'} />
       </div>
 
-      {server.tags && (
-        <div className="bg-card border border-border rounded-xl p-6">
+      {server.vars?.tags && (
+        <div className="bg-card border border-border rounded-xl p-6 mb-6">
           <h2 className="text-sm text-muted mb-4">Tags</h2>
           <div className="flex flex-wrap gap-2">
-            {server.tags.split(',').filter(t => t.trim()).slice(0, 20).map(tag => (
+            {String(server.vars.tags).split(',').filter(t => t.trim()).slice(0, 20).map(tag => (
               <span key={tag} className="px-3 py-1 bg-bg rounded-lg text-sm">{tag.trim()}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {server.resources.length > 0 && (
+        <div className="bg-card border border-border rounded-xl p-6">
+          <h2 className="text-sm text-muted mb-4">Resources ({server.resources.length})</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
+            {server.resources.map(r => (
+              <Link
+                key={r}
+                href={`/resources/${encodeURIComponent(r)}`}
+                className="px-3 py-2 bg-bg rounded-lg font-mono text-sm truncate hover:bg-zinc-800 transition-colors"
+              >
+                {r}
+              </Link>
             ))}
           </div>
         </div>
@@ -117,10 +131,13 @@ export default function ServerPage() {
   )
 }
 
-function Stat({ label, value }: { label: string; value: string | number }) {
+function Stat({ icon, label, value }: { icon?: React.ReactNode; label: string; value: string | number }) {
   return (
     <div className="bg-card border border-border rounded-xl p-4">
-      <p className="text-xs text-muted mb-1">{label}</p>
+      <div className="flex items-center gap-2 text-muted mb-1">
+        {icon}
+        <p className="text-xs">{label}</p>
+      </div>
       <p className="font-medium truncate">{value}</p>
     </div>
   )

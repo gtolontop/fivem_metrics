@@ -224,8 +224,9 @@ function parseDataMessage(data: Uint8Array): {
         const [val, valPos] = readVarint(data, pos)
         pos = valPos
 
-        if (fieldNum === 1) clients = val
-        if (fieldNum === 2) maxClients = val
+        // Field 1 = sv_maxclients, Field 2 = clients (current players)
+        if (fieldNum === 1) maxClients = val
+        if (fieldNum === 2) clients = val
       } else if (wireType === 5) { // 32-bit
         pos += 4
       } else if (wireType === 1) { // 64-bit
@@ -279,6 +280,49 @@ function parseVarEntry(data: Uint8Array): { key: string; value: string } | null 
 // Strip FiveM color codes (^0, ^1, etc.)
 function stripColorCodes(str: string): string {
   return str.replace(/\^[0-9]/g, '').trim()
+}
+
+// Fetch single server details (includes resources)
+export interface FiveMServerFull {
+  id: string
+  name: string
+  players: number
+  maxPlayers: number
+  gametype: string
+  mapname: string
+  resources: string[]
+  vars: Record<string, string>
+  server: string
+}
+
+export async function getServerDetails(serverId: string): Promise<FiveMServerFull | null> {
+  try {
+    const res = await fetch(`https://servers-frontend.fivem.net/api/servers/single/${serverId}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      cache: 'no-store',
+    })
+
+    if (!res.ok) return null
+
+    const data = await res.json()
+
+    return {
+      id: data.EndPoint || serverId,
+      name: stripColorCodes(data.Data?.hostname || data.Data?.vars?.sv_projectName || serverId),
+      players: data.Data?.clients || 0,
+      maxPlayers: data.Data?.sv_maxclients || 32,
+      gametype: data.Data?.gametype || '',
+      mapname: data.Data?.mapname || '',
+      resources: data.Data?.resources || [],
+      vars: data.Data?.vars || {},
+      server: data.Data?.server || ''
+    }
+  } catch (e) {
+    console.error('Failed to fetch server details:', e)
+    return null
+  }
 }
 
 // Slim server interface for client-side display
