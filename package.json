@@ -1,14 +1,13 @@
 {
   "name": "fivem-metrics",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "worker": "npx tsx scripts/worker.ts",
-    "turbo": "npx tsx scripts/turbo-scan.ts",
-    "ultra": "npx tsx scripts/ultra-scan.ts"
+    "migrate": "npx tsx scripts/migrate-to-queue.ts"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.2",
@@ -26,6 +25,7 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.7.0",
     "typescript": "^5.7.2"
   }
 }
