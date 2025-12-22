@@ -5,10 +5,12 @@
 import { getServersDirect } from './fivem'
 import { getCache, updateServers } from './cache'
 import { initializeQueues, queueServersForScan, isQueueEnabled, getQueueStats } from './queue'
+import { startBackgroundScanner } from './background-scan'
 
 let initialized = false
 let initializing = false
 let lastInitTime = 0
+let scannerStarted = false
 const REINIT_INTERVAL = 10 * 60 * 1000 // Re-init toutes les 10 min
 
 export async function autoInit(): Promise<{ success: boolean, message: string, stats?: object }> {
@@ -58,6 +60,13 @@ export async function autoInit(): Promise<{ success: boolean, message: string, s
 
     initialized = true
     lastInitTime = now
+
+    // 4. Start background scanner (Railway can do HTTP, CF Workers can't)
+    if (!scannerStarted) {
+      startBackgroundScanner()
+      scannerStarted = true
+      console.log('[Auto-Init] Background scanner started')
+    }
 
     const stats = await getQueueStats()
     console.log('[Auto-Init] Done!', stats)
