@@ -14,8 +14,8 @@ export async function GET(
     // Get top servers from bulk stream
     const { servers } = await getServersDirect()
 
-    // Fetch details for top 100 servers to find this resource
-    const topServers = servers.slice(0, 100)
+    // Fetch details for top 200 servers to find this resource
+    const topServers = servers.slice(0, 200)
     const serversWithResource: Array<{
       id: string
       name: string
@@ -24,9 +24,9 @@ export async function GET(
       gametype: string
     }> = []
 
-    // Fetch details in parallel (batches of 10)
-    for (let i = 0; i < topServers.length; i += 10) {
-      const batch = topServers.slice(i, i + 10)
+    // Fetch details in parallel (batches of 20)
+    for (let i = 0; i < topServers.length; i += 20) {
+      const batch = topServers.slice(i, i + 20)
       const details = await Promise.all(
         batch.map(s => getServerDetails(s.id))
       )
