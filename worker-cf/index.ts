@@ -137,9 +137,9 @@ export default {
       return Response.json({ ...result, timeMs: Date.now() - startTime })
     }
 
-    // Multiple batches sequentially (not parallel to avoid subrequest limit)
+    // Multiple batches sequentially (max 2 to stay under 50 subrequest limit)
     if (url.pathname === '/rapid') {
-      const rounds = Math.min(parseInt(url.searchParams.get('rounds') || '3'), 5)
+      const rounds = Math.min(parseInt(url.searchParams.get('rounds') || '2'), 2)
       const preferType = url.searchParams.get('type') || 'ip_fetch'
       const startTime = Date.now()
 
