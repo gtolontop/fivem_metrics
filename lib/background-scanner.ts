@@ -1,7 +1,8 @@
 // Background Scanner - Runs on the server, scans resources once IPs are available
 // Uses direct server hits - NO RATE LIMIT!
 
-import { getServersWithIp, addScannedServer, getScannedCount, getCache } from './cache'
+import { addScannedServer, getScannedCount, getCache } from './cache'
+import { isRedisEnabled, getIpMappingsFromRedis, saveResourcesToRedis } from './redis'
 
 interface ScanResult {
   serverId: string
@@ -50,7 +51,17 @@ export async function runScan(): Promise<{
   const startTime = Date.now()
 
   try {
-    const serversWithIp = getServersWithIp()
+    const cache = getCache()
+
+    // Get IPs from Redis if available
+    let serversWithIp: Array<{ id: string, ip: string, players: number }> = []
+
+    if (isRedisEnabled()) {
+      const ipMappings = await getIpMappingsFromRedis()
+      serversWithIp = cache.servers
+        .filter(s => ipMappings.has(s.id))
+        .map(s => ({ id: s.id, ip: ipMappings.get(s.id)!, players: s.players }))
+    }
 
     if (serversWithIp.length === 0) {
       return { scanned: 0, online: 0, resources: 0, timeMs: 0 }
@@ -64,12 +75,12 @@ export async function runScan(): Promise<{
     for (let i = 0; i < serversWithIp.length; i += PARALLEL_REQUESTS) {
       const batch = serversWithIp.slice(i, i + PARALLEL_REQUESTS)
 
-      const promises = batch.map(async ({ server, ip }): Promise<ScanResult> => {
+      const promises = batch.map(async ({ id, ip, players }): Promise<ScanResult> => {
         const resources = await scanServer(ip)
         return {
-          serverId: server.id,
+          serverId: id,
           resources,
-          players: server.players,
+          players,
           online: resources.length > 0
         }
       })
@@ -98,13 +109,23 @@ export async function runScan(): Promise<{
   }
 }
 
-// Check if we should run a scan
-export function shouldScan(): boolean {
+// Check if we should run a scan (async version for Redis)
+export async function shouldScanAsync(): Promise<boolean> {
   if (isScanning) return false
   if (Date.now() - lastScanTime < SCAN_INTERVAL) return false
 
-  const serversWithIp = getServersWithIp()
-  return serversWithIp.length > 0
+  if (isRedisEnabled()) {
+    const ipMappings = await getIpMappingsFromRedis()
+    return ipMappings.size > 0
+  }
+  return false
+}
+
+// Sync version for backwards compatibility
+export function shouldScan(): boolean {
+  if (isScanning) return false
+  if (Date.now() - lastScanTime < SCAN_INTERVAL) return false
+  return true // Will check Redis in runScan
 }
 
 // Get scan status
@@ -115,7 +136,7 @@ export function getScanStatus() {
     lastScanTime,
     scannedCount: getScannedCount(),
     resourceCount: cache.resources.length,
-    serversWithIp: getServersWithIp().length
+    serversWithIp: 0 // Will be updated from Redis in status route
   }
 }
 
