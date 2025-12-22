@@ -1,19 +1,38 @@
 import { NextResponse } from 'next/server'
-import { getCache, getScannedCount, getIpMappingCount as getLocalIpCount } from '@/lib/cache'
+import { getCache, getScannedCount, getIpMappingCount as getLocalIpCount, loadResourcesFromRedis } from '@/lib/cache'
 import {
   isRedisEnabled,
   getRedisStats,
   getOnlineServerCount,
   getScannedServerCount
 } from '@/lib/redis'
-import { getScanStatus } from '@/lib/background-scanner'
-import { getCollectorStatus } from '@/lib/ip-collector'
+import { runScan, getScanStatus } from '@/lib/background-scanner'
+import { collectIpBatch, getCollectorStatus } from '@/lib/ip-collector'
 
 export const dynamic = 'force-dynamic'
 
-// Background services now start automatically via instrumentation.ts
+// Track last scan/collect time to avoid spamming
+let lastScanTime = 0
+let lastCollectTime = 0
+const SCAN_INTERVAL = 60 * 1000 // 1 minute
+const COLLECT_INTERVAL = 30 * 1000 // 30 seconds
 
 export async function GET() {
+  // Load resources from Redis on first call
+  await loadResourcesFromRedis()
+
+  // Auto-collect IPs if needed (every 30s)
+  const now = Date.now()
+  if (isRedisEnabled() && now - lastCollectTime > COLLECT_INTERVAL) {
+    lastCollectTime = now
+    collectIpBatch().catch(() => {}) // Don't wait
+  }
+
+  // Auto-scan if we have IPs and haven't scanned recently
+  if (isRedisEnabled() && now - lastScanTime > SCAN_INTERVAL) {
+    lastScanTime = now
+    runScan().catch(() => {}) // Don't wait
+  }
 
   const cache = getCache()
   const bgStatus = getScanStatus()
