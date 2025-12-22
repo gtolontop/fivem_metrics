@@ -1,27 +1,18 @@
 import { NextResponse } from 'next/server'
-import { getCache, getScannedCount, getIpMappingCount as getLocalIpCount, loadResourcesFromRedis } from '@/lib/cache'
+import { getCache, getScannedCount, getIpMappingCount as getLocalIpCount } from '@/lib/cache'
 import {
   isRedisEnabled,
   getRedisStats,
   getOnlineServerCount
 } from '@/lib/redis'
-import { getScanStatus, startBackgroundScanner } from '@/lib/background-scanner'
-import { startIpCollector, getCollectorStatus } from '@/lib/ip-collector'
+import { getScanStatus } from '@/lib/background-scanner'
+import { getCollectorStatus } from '@/lib/ip-collector'
 
 export const dynamic = 'force-dynamic'
 
-// Ensure background services start on first status check
-let bgStarted = false
+// Background services now start automatically via instrumentation.ts
 
 export async function GET() {
-  // Start background services if not already started
-  if (!bgStarted) {
-    // Load persisted resources from Redis
-    await loadResourcesFromRedis()
-    startBackgroundScanner()
-    startIpCollector() // Auto-collect IPs on Railway
-    bgStarted = true
-  }
 
   const cache = getCache()
   const bgStatus = getScanStatus()
