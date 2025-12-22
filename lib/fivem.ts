@@ -295,6 +295,54 @@ export interface FiveMServerFull {
   server: string
 }
 
+// Fetch directly from server's info.json endpoint (no FiveM rate limit!)
+export async function getServerInfoDirect(endpoint: string): Promise<{ resources: string[] } | null> {
+  try {
+    // endpoint format: "ip:port" or just IP
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3000) // 3 sec timeout
+
+    const res = await fetch(`http://${endpoint}/info.json`, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+      },
+    })
+    clearTimeout(timeout)
+
+    if (!res.ok) return null
+
+    const data = await res.json()
+    return {
+      resources: data.resources || []
+    }
+  } catch {
+    // Server offline, timeout, or blocked - just skip
+    return null
+  }
+}
+
+// Batch fetch server info directly (parallel with concurrency limit)
+export async function batchGetServerInfo(
+  endpoints: string[],
+  concurrency: number = 20
+): Promise<Map<string, string[]>> {
+  const results = new Map<string, string[]>()
+
+  for (let i = 0; i < endpoints.length; i += concurrency) {
+    const batch = endpoints.slice(i, i + concurrency)
+    const promises = batch.map(async (endpoint) => {
+      const info = await getServerInfoDirect(endpoint)
+      if (info && info.resources.length > 0) {
+        results.set(endpoint, info.resources)
+      }
+    })
+    await Promise.all(promises)
+  }
+
+  return results
+}
+
 export async function getServerDetails(serverId: string): Promise<FiveMServerFull | null> {
   try {
     const res = await fetch(`https://servers-frontend.fivem.net/api/servers/single/${serverId}`, {
