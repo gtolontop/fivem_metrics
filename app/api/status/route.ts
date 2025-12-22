@@ -6,21 +6,24 @@ import {
   getOnlineServerCount
 } from '@/lib/redis'
 import { getScanStatus, startBackgroundScanner } from '@/lib/background-scanner'
+import { startIpCollector, getCollectorStatus } from '@/lib/ip-collector'
 
 export const dynamic = 'force-dynamic'
 
-// Ensure background scanner starts on first status check
+// Ensure background services start on first status check
 let bgStarted = false
 
 export async function GET() {
-  // Start background scanner if not already started
+  // Start background services if not already started
   if (!bgStarted) {
     startBackgroundScanner()
+    startIpCollector() // Auto-collect IPs on Railway
     bgStarted = true
   }
 
   const cache = getCache()
   const bgStatus = getScanStatus()
+  const collectorStatus = getCollectorStatus()
 
   // Get stats from Redis or local
   let ipCount: number
@@ -62,6 +65,11 @@ export async function GET() {
       running: bgStatus.isScanning,
       lastScan: bgStatus.lastScanTime > 0 ? new Date(bgStatus.lastScanTime).toISOString() : null,
       serversWithIp: bgStatus.serversWithIp
+    },
+    ipCollector: {
+      running: collectorStatus.running,
+      collecting: collectorStatus.isCollecting,
+      collected: collectorStatus.totalCollected
     },
     estimate: {
       needIp: totalServers - ipCount,
