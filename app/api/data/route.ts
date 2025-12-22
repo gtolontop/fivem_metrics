@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
 import { getServersDirect } from '@/lib/fivem'
-import { getCache, isCacheValid, updateServers, updateResources } from '@/lib/cache'
+import { getCache, isCacheValid, updateServers } from '@/lib/cache'
+import { getResources, isQueueEnabled } from '@/lib/queue'
 
 export const dynamic = 'force-dynamic'
 
-// Background refresh flag to prevent multiple concurrent refreshes
+// Background refresh flag
 let isRefreshing = false
 
 async function refreshData() {
@@ -12,12 +13,9 @@ async function refreshData() {
   isRefreshing = true
 
   try {
-    const { servers, resources, totalPlayers, totalServers } = await getServersDirect()
+    const { servers, totalPlayers, totalServers } = await getServersDirect()
     if (servers.length > 0) {
       updateServers(servers, totalPlayers, totalServers)
-      if (resources.length > 0) {
-        updateResources(resources)
-      }
     }
   } catch (e) {
     console.error('Background refresh failed:', e)
@@ -26,20 +24,22 @@ async function refreshData() {
   }
 }
 
-// Only send top 100 servers to UI, but cache all 32K+ for scanning
+// Only send top 100 servers to UI
 const UI_SERVER_LIMIT = 100
 
 export async function GET() {
   const cache = getCache()
 
+  // Get resources from Redis if available
+  const resources = isQueueEnabled() ? await getResources() : []
+
   // If cache is valid, return cached data and refresh in background
   if (isCacheValid()) {
-    // Trigger background refresh without awaiting
     refreshData()
 
     return NextResponse.json({
       servers: cache.servers.slice(0, UI_SERVER_LIMIT),
-      resources: cache.resources.slice(0, 100),
+      resources: resources.slice(0, 100),
       totalPlayers: cache.totalPlayers,
       totalServers: cache.totalServers,
       cached: true,
@@ -49,13 +49,13 @@ export async function GET() {
 
   // Cache is stale or empty, fetch fresh data
   try {
-    const { servers, resources, totalPlayers, totalServers } = await getServersDirect()
+    const { servers, totalPlayers, totalServers } = await getServersDirect()
 
     // If FiveM API returned empty (rate limited), use stale cache
     if (servers.length === 0 && cache.servers.length > 0) {
       return NextResponse.json({
         servers: cache.servers.slice(0, UI_SERVER_LIMIT),
-        resources: cache.resources.slice(0, 100),
+        resources: resources.slice(0, 100),
         totalPlayers: cache.totalPlayers,
         totalServers: cache.totalServers,
         cached: true,
@@ -66,9 +66,6 @@ export async function GET() {
 
     if (servers.length > 0) {
       updateServers(servers, totalPlayers, totalServers)
-      if (resources.length > 0) {
-        updateResources(resources)
-      }
     }
 
     return NextResponse.json({
@@ -81,11 +78,11 @@ export async function GET() {
   } catch (error) {
     console.error('API error:', error)
 
-    // Return cached data if available, even if stale
+    // Return cached data if available
     if (cache.servers.length > 0) {
       return NextResponse.json({
         servers: cache.servers.slice(0, UI_SERVER_LIMIT),
-        resources: cache.resources.slice(0, 100),
+        resources: resources.slice(0, 100),
         totalPlayers: cache.totalPlayers,
         totalServers: cache.totalServers,
         cached: true,

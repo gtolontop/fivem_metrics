@@ -1,18 +1,35 @@
 import { NextResponse } from 'next/server'
-import { getCache, getScannedCount } from '@/lib/cache'
+import { getResources, getQueueStats, isQueueEnabled } from '@/lib/queue'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const cache = getCache()
+  if (!isQueueEnabled()) {
+    return NextResponse.json({
+      error: 'Redis not configured',
+      resources: [],
+      totalResources: 0,
+      serversScanned: 0,
+      totalServers: 0,
+      scanProgress: 0
+    }, { status: 503 })
+  }
+
+  const [resources, stats] = await Promise.all([
+    getResources(),
+    getQueueStats()
+  ])
+
+  const totalScanned = stats.totalOnline + stats.totalOffline + stats.totalUnavailable
 
   return NextResponse.json({
-    resources: cache.resources,
-    totalResources: cache.resources.length,
-    serversScanned: getScannedCount(),
-    totalServers: cache.servers.length,
-    scanProgress: cache.servers.length > 0
-      ? Math.round((getScannedCount() / cache.servers.length) * 100)
+    resources,
+    totalResources: resources.length,
+    serversScanned: totalScanned,
+    totalServers: stats.totalServers,
+    serversOnline: stats.totalOnline,
+    scanProgress: stats.totalWithIp > 0
+      ? Math.round((totalScanned / stats.totalWithIp) * 100)
       : 0
   })
 }
