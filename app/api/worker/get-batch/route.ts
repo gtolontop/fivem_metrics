@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCache, getIpMappingCount } from '@/lib/cache'
-import { isRedisEnabled, getIpMappingsFromRedis, getIpMappingCount as getRedisIpCount } from '@/lib/redis'
+import { isRedisEnabled, getIpMappingsFromRedis, getIpMappingCount as getRedisIpCount, getStaleIpServers } from '@/lib/redis'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,6 +17,7 @@ const processing = globalProcessing.__processing
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const workerId = searchParams.get('worker') || 'unknown'
+  const includeStale = searchParams.get('stale') === 'true' // ?stale=true pour refresh les vieilles IPs
 
   const cache = getCache()
 
@@ -42,10 +43,22 @@ export async function GET(request: Request) {
     processedCount = getIpMappingCount()
   }
 
-  // Get servers without IP that aren't being processed
-  const needIp = cache.servers
-    .filter(s => !existingIps.has(s.id) && !processing.has(s.id))
-    .slice(0, BATCH_SIZE)
+  let needIp: typeof cache.servers
+
+  if (includeStale && isRedisEnabled()) {
+    // Mode refresh: get servers with stale IPs (older than 24h)
+    const allServerIds = cache.servers.map(s => s.id)
+    const staleIds = await getStaleIpServers(allServerIds)
+    const staleSet = new Set(staleIds)
+    needIp = cache.servers
+      .filter(s => staleSet.has(s.id) && !processing.has(s.id))
+      .slice(0, BATCH_SIZE)
+  } else {
+    // Mode normal: get servers without IP
+    needIp = cache.servers
+      .filter(s => !existingIps.has(s.id) && !processing.has(s.id))
+      .slice(0, BATCH_SIZE)
+  }
 
   // Mark as processing
   needIp.forEach(s => processing.add(s.id))
@@ -63,6 +76,7 @@ export async function GET(request: Request) {
     processed: processedCount,
     remaining: cache.servers.length - processedCount,
     progress: Math.round((processedCount / cache.servers.length) * 100),
+    mode: includeStale ? 'refresh' : 'new',
     storage: isRedisEnabled() ? 'redis' : 'file'
   })
 }
