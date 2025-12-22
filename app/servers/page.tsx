@@ -4,7 +4,7 @@ import SearchServers from './SearchServers'
 async function getServers() {
   const res = await fetch('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
     headers: { 'User-Agent': 'FiveM-Metrics/1.0' },
-    next: { revalidate: 60 }
+    cache: 'no-store'
   })
   const text = await res.text()
   const lines = text.split('\n').filter(l => l.trim())

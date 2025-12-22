@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
 
-export const revalidate = 60
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
     const res = await fetch('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
       headers: { 'User-Agent': 'FiveM-Metrics/1.0' },
-      next: { revalidate: 60 }
+      cache: 'no-store'
     })
 
     const text = await res.text()
