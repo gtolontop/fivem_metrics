@@ -8,6 +8,9 @@ import { getWorkerBatch, submitScanResults, getQueueStats, isQueueEnabled, ScanR
 let isScanning = false
 let scanInterval: ReturnType<typeof setInterval> | null = null
 
+// Railway can handle larger batches than CF Workers
+const BATCH_SIZE = 100
+
 async function scanServer(serverId: string, ip: string): Promise<ScanResult> {
   try {
     const controller = new AbortController()
@@ -42,8 +45,8 @@ async function runScanBatch(): Promise<{ scanned: number, online: number }> {
   isScanning = true
 
   try {
-    // Get batch of servers to scan
-    const tasks = await getWorkerBatch('railway-scanner', 'scan')
+    // Get batch of servers to scan (100 at a time for Railway)
+    const tasks = await getWorkerBatch('railway-scanner', 'scan', BATCH_SIZE)
 
     if (tasks.length === 0) {
       return { scanned: 0, online: 0 }

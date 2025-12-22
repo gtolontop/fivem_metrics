@@ -198,10 +198,14 @@ export async function queueServersForScan(): Promise<number> {
 
 /**
  * Récupère un batch de travail pour un worker
+ * @param workerId - Identifiant du worker
+ * @param preferType - Type de tâche préféré
+ * @param batchSize - Taille du batch (default: BATCH_SIZE pour CF, peut être plus grand pour Railway)
  */
-export async function getWorkerBatch(workerId: string, preferType?: 'ip_fetch' | 'scan'): Promise<WorkerTask[]> {
+export async function getWorkerBatch(workerId: string, preferType?: 'ip_fetch' | 'scan', batchSize?: number): Promise<WorkerTask[]> {
   if (!redis) return []
 
+  const maxBatch = batchSize || BATCH_SIZE
   const tasks: WorkerTask[] = []
   const now = Date.now()
 
@@ -211,9 +215,9 @@ export async function getWorkerBatch(workerId: string, preferType?: 'ip_fetch' |
     : [QUEUE_IP_FETCH, QUEUE_SCAN]
 
   for (const queue of queues) {
-    if (tasks.length >= BATCH_SIZE) break
+    if (tasks.length >= maxBatch) break
 
-    const remaining = BATCH_SIZE - tasks.length
+    const remaining = maxBatch - tasks.length
     const type = queue === QUEUE_IP_FETCH ? 'ip_fetch' : 'scan'
 
     // LPOP multiple éléments

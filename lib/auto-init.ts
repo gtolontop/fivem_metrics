@@ -6,11 +6,12 @@ import { getServersDirect } from './fivem'
 import { getCache, updateServers } from './cache'
 import { initializeQueues, queueServersForScan, isQueueEnabled, getQueueStats } from './queue'
 import { startBackgroundScanner } from './background-scan'
+import { startBackgroundIpFetcher } from './background-ip'
 
 let initialized = false
 let initializing = false
 let lastInitTime = 0
-let scannerStarted = false
+let workersStarted = false
 const REINIT_INTERVAL = 10 * 60 * 1000 // Re-init toutes les 10 min
 
 export async function autoInit(): Promise<{ success: boolean, message: string, stats?: object }> {
@@ -61,11 +62,12 @@ export async function autoInit(): Promise<{ success: boolean, message: string, s
     initialized = true
     lastInitTime = now
 
-    // 4. Start background scanner (Railway can do HTTP, CF Workers can't)
-    if (!scannerStarted) {
-      startBackgroundScanner()
-      scannerStarted = true
-      console.log('[Auto-Init] Background scanner started')
+    // 4. Start background workers (Railway only)
+    if (!workersStarted) {
+      startBackgroundIpFetcher()  // Fetch IPs from FiveM API
+      startBackgroundScanner()     // Scan servers for resources
+      workersStarted = true
+      console.log('[Auto-Init] Background workers started (IP fetcher + scanner)')
     }
 
     const stats = await getQueueStats()
