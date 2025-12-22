@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "worker": "npx tsx scripts/worker.ts"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.2",
