@@ -48,7 +48,7 @@ function ensureIpMappingsLoaded() {
   }
 }
 
-const CACHE_TTL = 60 * 1000 // 1 minute for server list
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutes for server list (longer to survive rate limits)
 const RESOURCE_SCAN_INTERVAL = 5 * 1000 // 5 seconds between scan batches
 
 export function getCache(): CacheData {
@@ -57,6 +57,10 @@ export function getCache(): CacheData {
 
 export function isCacheValid(): boolean {
   return Date.now() - cache.lastUpdate < CACHE_TTL && cache.servers.length > 0
+}
+
+export function hasCachedData(): boolean {
+  return cache.servers.length > 0
 }
 
 export function shouldScanResources(): boolean {

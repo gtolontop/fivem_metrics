@@ -51,6 +51,19 @@ export async function GET() {
   try {
     const { servers, resources, totalPlayers, totalServers } = await getServersDirect()
 
+    // If FiveM API returned empty (rate limited), use stale cache
+    if (servers.length === 0 && cache.servers.length > 0) {
+      return NextResponse.json({
+        servers: cache.servers.slice(0, UI_SERVER_LIMIT),
+        resources: cache.resources.slice(0, 100),
+        totalPlayers: cache.totalPlayers,
+        totalServers: cache.totalServers,
+        cached: true,
+        stale: true,
+        rateLimited: true
+      })
+    }
+
     if (servers.length > 0) {
       updateServers(servers, totalPlayers, totalServers)
       if (resources.length > 0) {
