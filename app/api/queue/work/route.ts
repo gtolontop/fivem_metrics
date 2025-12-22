@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getWorkerBatch, isQueueEnabled, cleanupStaleProcessing } from '@/lib/queue'
+import { autoInit } from '@/lib/auto-init'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,6 +14,9 @@ export async function GET(request: Request) {
   if (!isQueueEnabled()) {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 })
   }
+
+  // Auto-init si pas encore fait
+  await autoInit()
 
   const { searchParams } = new URL(request.url)
   const workerId = searchParams.get('worker') || `anon-${Date.now()}`
