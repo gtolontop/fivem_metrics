@@ -5,9 +5,6 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: '**' }
     ]
-  },
-  experimental: {
-    instrumentationHook: true
   }
 }
 
