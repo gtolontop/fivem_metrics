@@ -1,0 +1,15 @@
+# Worker Dockerfile - run multiple instances of this
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Only copy what we need for the worker
+COPY package*.json ./
+COPY scripts/worker.ts ./scripts/
+
+RUN npm install tsx
+
+# API_BASE environment variable must be set
+ENV API_BASE=""
+
+CMD ["npx", "tsx", "scripts/worker.ts"]
