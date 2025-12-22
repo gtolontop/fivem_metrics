@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getCache, getScannedCount, getIpMappingCount as getLocalIpCount } from '@/lib/cache'
+import { getCache, getScannedCount, getIpMappingCount as getLocalIpCount, loadResourcesFromRedis } from '@/lib/cache'
 import {
   isRedisEnabled,
   getRedisStats,
@@ -16,6 +16,8 @@ let bgStarted = false
 export async function GET() {
   // Start background services if not already started
   if (!bgStarted) {
+    // Load persisted resources from Redis
+    await loadResourcesFromRedis()
     startBackgroundScanner()
     startIpCollector() // Auto-collect IPs on Railway
     bgStarted = true

@@ -1,5 +1,6 @@
 import { FiveMResource, FiveMServerSlim } from './fivem'
 import { loadIpMappings, saveIpMappings } from './ip-store'
+import { isRedisEnabled, saveResourcesToRedis, getResourcesFromRedis } from './redis'
 
 interface CacheData {
   servers: FiveMServerSlim[]
@@ -83,6 +84,9 @@ export function updateResources(resources: FiveMResource[]): void {
   cache.resources = resources
 }
 
+// Debounced Redis save
+let saveToRedisTimeout: ReturnType<typeof setTimeout> | null = null
+
 export function addScannedServer(serverId: string, resources: string[], players: number): void {
   cache.scannedServerIds.add(serverId)
 
@@ -106,6 +110,28 @@ export function addScannedServer(serverId: string, resources: string[], players:
     .sort((a, b) => b.servers - a.servers)
 
   cache.lastResourceScan = Date.now()
+
+  // Debounced save to Redis (every 5 seconds max)
+  if (isRedisEnabled()) {
+    if (saveToRedisTimeout) clearTimeout(saveToRedisTimeout)
+    saveToRedisTimeout = setTimeout(() => {
+      saveResourcesToRedis(cache.resources).catch(() => {})
+    }, 5000)
+  }
+}
+
+// Load resources from Redis (call on startup)
+export async function loadResourcesFromRedis(): Promise<void> {
+  if (!isRedisEnabled()) return
+  try {
+    const resources = await getResourcesFromRedis()
+    if (resources.length > 0) {
+      cache.resources = resources
+      console.log('Loaded', resources.length, 'resources from Redis')
+    }
+  } catch (e) {
+    console.error('Failed to load resources from Redis:', e)
+  }
 }
 
 export function getUnscannedServers(limit: number): FiveMServerSlim[] {
