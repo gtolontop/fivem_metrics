@@ -39,7 +39,7 @@ const IP_REFRESH_HOURS = 24        // Re-fetch IP après 24h
 const SCAN_REFRESH_HOURS = 1       // Re-scan après 1h
 const UNAVAILABLE_RETRY_HOURS = 6  // Re-essayer les unavailable après 6h
 const PROCESSING_TIMEOUT_MS = 60000 // Timeout si un worker ne répond pas en 60s
-const BATCH_SIZE = 50              // Nombre de serveurs par batch
+const BATCH_SIZE = 20              // Nombre de serveurs par batch (20 pour CF Workers limit)
 
 // ============================================================================
 // TYPES
