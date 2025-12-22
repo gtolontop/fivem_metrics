@@ -1,0 +1,10 @@
+name = "fivem-ip-worker"
+main = "index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+API_BASE = "https://ton-app.railway.app"
+
+# Cron trigger - run every minute (FREE!)
+[triggers]
+crons = ["* * * * *"]

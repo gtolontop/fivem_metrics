@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "worker": "npx tsx scripts/worker.ts"
+    "worker": "npx tsx scripts/worker.ts",
+    "turbo": "npx tsx scripts/turbo-scan.ts"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.2",
