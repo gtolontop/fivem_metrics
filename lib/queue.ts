@@ -250,39 +250,76 @@ export async function initializeQueuesWithDirectIps(
     console.log(`[FastInit] Stored ${playerCounts.size} player counts`)
   }
 
-  // Queue servers with direct IPs for scanning immediately
+  // Queue servers with direct IPs for scanning
+  // BUT: Don't reset queue if scanning is already in progress!
+  const currentQueueSize = await redis.llen(QUEUE_SCAN)
   const serversWithIps = Array.from(directIps.keys())
-  if (serversWithIps.length > 0) {
-    const pipeline = redis.pipeline()
-    pipeline.del(QUEUE_SCAN)
 
+  if (currentQueueSize > 0) {
+    // Scanning in progress - only add NEW servers (not already in queue)
+    console.log(`[FastInit] Scan queue has ${currentQueueSize} pending - only adding new servers`)
+
+    // Get servers already queued to avoid duplicates
+    // Note: We check status - if never scanned, add to queue
+    const statuses = await redis.hgetall(DATA_STATUS)
+    const newServers = serversWithIps.filter(id => !statuses[id])
+
+    if (newServers.length > 0) {
+      for (let i = 0; i < newServers.length; i += 1000) {
+        const batch = newServers.slice(i, i + 1000)
+        await redis.rpush(QUEUE_SCAN, ...batch)
+      }
+      console.log(`[FastInit] Added ${newServers.length} NEW servers to scan queue`)
+    } else {
+      console.log(`[FastInit] No new servers to add`)
+    }
+  } else if (serversWithIps.length > 0) {
+    // Queue empty - populate it
+    const pipeline = redis.pipeline()
     for (let i = 0; i < serversWithIps.length; i += 1000) {
       const batch = serversWithIps.slice(i, i + 1000)
       pipeline.rpush(QUEUE_SCAN, ...batch)
     }
-
     await pipeline.exec()
-    console.log(`[FastInit] Queued ${serversWithIps.length} servers for immediate scan`)
+    console.log(`[FastInit] Queued ${serversWithIps.length} servers for scan`)
   }
 
   // Queue only servers that need URL resolution for IP fetch
+  // Don't reset if already processing
+  const currentIpQueueSize = await redis.llen(QUEUE_IP_FETCH)
+  let queuedForIpFetch = 0
+
   if (needsResolution.length > 0) {
-    const pipeline = redis.pipeline()
-    pipeline.del(QUEUE_IP_FETCH)
+    if (currentIpQueueSize > 0) {
+      // Already processing - only add servers we don't have IPs for yet
+      const existingIps = await redis.hgetall(DATA_IPS)
+      const newNeedsResolution = needsResolution.filter(id => !existingIps[id])
 
-    for (let i = 0; i < needsResolution.length; i += 1000) {
-      const batch = needsResolution.slice(i, i + 1000)
-      pipeline.rpush(QUEUE_IP_FETCH, ...batch)
+      if (newNeedsResolution.length > 0) {
+        for (let i = 0; i < newNeedsResolution.length; i += 1000) {
+          const batch = newNeedsResolution.slice(i, i + 1000)
+          await redis.rpush(QUEUE_IP_FETCH, ...batch)
+        }
+        queuedForIpFetch = newNeedsResolution.length
+        console.log(`[FastInit] Added ${newNeedsResolution.length} NEW servers for IP resolution`)
+      }
+    } else {
+      // Queue empty - populate it
+      const pipeline = redis.pipeline()
+      for (let i = 0; i < needsResolution.length; i += 1000) {
+        const batch = needsResolution.slice(i, i + 1000)
+        pipeline.rpush(QUEUE_IP_FETCH, ...batch)
+      }
+      await pipeline.exec()
+      queuedForIpFetch = needsResolution.length
+      console.log(`[FastInit] Queued ${needsResolution.length} servers for IP resolution`)
     }
-
-    await pipeline.exec()
-    console.log(`[FastInit] Queued ${needsResolution.length} servers for IP resolution (URLs only)`)
   }
 
   return {
     directIpsStored: directIps.size,
-    needsApiFetch: needsResolution.length,
-    queuedForScan: serversWithIps.length
+    needsApiFetch: queuedForIpFetch,
+    queuedForScan: currentQueueSize > 0 ? 0 : serversWithIps.length  // 0 if already scanning
   }
 }
 
