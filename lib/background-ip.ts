@@ -1,28 +1,29 @@
 /**
  * Background IP Fetcher - Runs on Railway
- * Fetches IPs from FiveM API in parallel batches
+ * Fetches IPs from FiveM API with rate limit handling
+ *
+ * NOTE: FiveM rate limits aggressively (~100-150 requests then blocks)
+ * We use exponential backoff when rate limited
  */
 
 import { getWorkerBatch, submitIpResults, getQueueStats, isQueueEnabled, IpResult } from './queue'
 
-let isFetching = false
-let fetchInterval: ReturnType<typeof setInterval> | null = null
+let isRunning = false
+let shouldStop = false
+let currentBackoff = 5000  // Start with 5s delay
+const MIN_BACKOFF = 5000   // Minimum 5s between batches
+const MAX_BACKOFF = 60000  // Max 60s when rate limited
 
-// FiveM API has rate limits, but we can do ~100 concurrent requests
-const BATCH_SIZE = 100           // Get 100 tasks at a time from queue
-const CONCURRENT_REQUESTS = 50   // Execute 50 concurrently (then next 50)
-const DELAY_BETWEEN_BATCHES = 3000 // 3 seconds between batches to avoid rate limit
+// Conservative settings to avoid rate limits
+const BATCH_SIZE = 30      // Small batches
+const CONCURRENT = 10      // Only 10 concurrent
 
 async function fetchIp(serverId: string): Promise<IpResult> {
   try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 10000)
-
     const res = await fetch(`https://servers-frontend.fivem.net/api/servers/single/${serverId}`, {
-      signal: controller.signal,
+      signal: AbortSignal.timeout(10000),
       headers: { 'User-Agent': 'Mozilla/5.0' }
     })
-    clearTimeout(timeout)
 
     if (res.status === 429) {
       return { serverId, ip: null, error: 'rate_limited' }
@@ -36,84 +37,96 @@ async function fetchIp(serverId: string): Promise<IpResult> {
     const ip = data.Data?.connectEndPoints?.[0] || null
 
     return { serverId, ip }
-  } catch (e) {
-    return { serverId, ip: null, error: e instanceof Error ? e.message : 'unknown' }
+  } catch {
+    return { serverId, ip: null, error: 'timeout' }
   }
 }
 
-async function runIpFetchBatch(): Promise<{ fetched: number, success: number }> {
-  if (isFetching || !isQueueEnabled()) return { fetched: 0, success: 0 }
+async function runContinuousFetch(): Promise<void> {
+  if (isRunning || !isQueueEnabled()) return
 
-  isFetching = true
+  isRunning = true
+  shouldStop = false
 
-  try {
-    // Get batch of servers to fetch IPs for (100 at a time for Railway)
-    const tasks = await getWorkerBatch('railway-ip-fetcher', 'ip_fetch', BATCH_SIZE)
+  console.log(`[BG-IP] Starting (${BATCH_SIZE} batch, ${CONCURRENT} concurrent, ${MIN_BACKOFF}ms min delay)`)
 
-    if (tasks.length === 0) {
-      return { fetched: 0, success: 0 }
-    }
+  while (!shouldStop) {
+    try {
+      const stats = await getQueueStats()
 
-    // Filter only ip_fetch tasks
-    const ipTasks = tasks.filter(t => t.type === 'ip_fetch')
-
-    if (ipTasks.length === 0) {
-      return { fetched: 0, success: 0 }
-    }
-
-    // Fetch in parallel with concurrency limit
-    const results: IpResult[] = []
-
-    for (let i = 0; i < ipTasks.length; i += CONCURRENT_REQUESTS) {
-      const batch = ipTasks.slice(i, i + CONCURRENT_REQUESTS)
-      const batchResults = await Promise.all(
-        batch.map(t => fetchIp(t.serverId))
-      )
-      results.push(...batchResults)
-
-      // Small delay between sub-batches to avoid rate limiting
-      if (i + CONCURRENT_REQUESTS < ipTasks.length) {
-        await new Promise(resolve => setTimeout(resolve, 100))
+      if (stats.pendingIpFetch === 0) {
+        console.log('[BG-IP] Queue empty, waiting...')
+        await new Promise(r => setTimeout(r, 30000))
+        continue
       }
+
+      // Get small batch
+      const tasks = await getWorkerBatch('railway-ip-fetcher', 'ip_fetch', BATCH_SIZE)
+      const ipTasks = tasks.filter(t => t.type === 'ip_fetch')
+
+      if (ipTasks.length === 0) {
+        await new Promise(r => setTimeout(r, 5000))
+        continue
+      }
+
+      // Fetch with concurrency limit
+      const results: IpResult[] = []
+      for (let i = 0; i < ipTasks.length; i += CONCURRENT) {
+        const batch = ipTasks.slice(i, i + CONCURRENT)
+        const batchResults = await Promise.all(batch.map(t => fetchIp(t.serverId)))
+        results.push(...batchResults)
+
+        // Delay between sub-batches
+        if (i + CONCURRENT < ipTasks.length) {
+          await new Promise(r => setTimeout(r, 500))
+        }
+      }
+
+      // Submit results
+      const { success, failed } = await submitIpResults(results)
+
+      // Check for rate limiting
+      const rateLimited = results.filter(r => r.error === 'rate_limited').length
+      const successRate = results.length > 0 ? success / results.length : 0
+
+      if (rateLimited > 0 || successRate < 0.5) {
+        // Increase backoff when rate limited
+        currentBackoff = Math.min(currentBackoff * 2, MAX_BACKOFF)
+        console.log(`[BG-IP] Rate limited! Backing off to ${currentBackoff / 1000}s`)
+      } else if (success > 0) {
+        // Decrease backoff on success
+        currentBackoff = Math.max(currentBackoff * 0.8, MIN_BACKOFF)
+      }
+
+      console.log(`[BG-IP] ${success}/${results.length} success, ${stats.pendingIpFetch} pending, next in ${(currentBackoff/1000).toFixed(0)}s`)
+
+      // Wait before next batch
+      await new Promise(r => setTimeout(r, currentBackoff))
+
+    } catch (e) {
+      console.error('[BG-IP] Error:', e)
+      await new Promise(r => setTimeout(r, 10000))
     }
-
-    // Submit results
-    const { success } = await submitIpResults(results)
-
-    console.log(`[BG-IP] Fetched ${results.length}, success: ${success}`)
-    return { fetched: results.length, success }
-
-  } catch (e) {
-    console.error('[BG-IP] Error:', e)
-    return { fetched: 0, success: 0 }
-  } finally {
-    isFetching = false
   }
+
+  isRunning = false
+  console.log('[BG-IP] Stopped')
 }
 
 export function startBackgroundIpFetcher() {
-  if (fetchInterval) return
-
-  console.log('[BG-IP] Starting background IP fetcher')
-
-  // Run every 3 seconds (aggressive but with rate limit handling)
-  fetchInterval = setInterval(async () => {
-    const stats = await getQueueStats()
-    if (stats.pendingIpFetch > 0) {
-      await runIpFetchBatch()
-    }
-  }, DELAY_BETWEEN_BATCHES)
-
-  // Run immediately
-  runIpFetchBatch()
+  if (isRunning) return
+  runContinuousFetch()
 }
 
 export function stopBackgroundIpFetcher() {
-  if (fetchInterval) {
-    clearInterval(fetchInterval)
-    fetchInterval = null
-    console.log('[BG-IP] Stopped')
-  }
+  shouldStop = true
+  console.log('[BG-IP] Stop requested')
+}
+
+// For backwards compatibility
+async function runIpFetchBatch(): Promise<{ fetched: number, success: number }> {
+  if (!isRunning) startBackgroundIpFetcher()
+  return { fetched: 0, success: 0 }
 }
 
 export { runIpFetchBatch }

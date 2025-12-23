@@ -11,8 +11,8 @@ import { getWorkerBatch, submitScanResults, getQueueStats, isQueueEnabled, ScanR
 let isRunning = false
 let shouldStop = false
 
-// Optimized: 200 concurrent (500 was too aggressive for Railway)
-const BATCH_SIZE = 200
+// Balanced: 300 concurrent with reliable timeout
+const BATCH_SIZE = 300
 const TIMEOUT_MS = 3000
 
 async function scanServer(serverId: string, ip: string): Promise<ScanResult> {
