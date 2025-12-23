@@ -4,28 +4,32 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 // SSE endpoint for real-time stats updates
+// Sends: stats every 2s, resources every 10s (to avoid huge payloads)
 export async function GET() {
   if (!isQueueEnabled()) {
     return new Response('Redis not configured', { status: 503 })
   }
 
   const encoder = new TextEncoder()
+  let isClosed = false
+  let statsInterval: ReturnType<typeof setInterval> | null = null
+  let resourcesInterval: ReturnType<typeof setInterval> | null = null
+  let lastResourceCount = 0
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Send stats (lightweight, every 2s)
       const sendStats = async () => {
-        try {
-          const [resources, stats] = await Promise.all([
-            getResources(),
-            getQueueStats()
-          ])
+        if (isClosed) return
 
+        try {
+          const stats = await getQueueStats()
           const totalScanned = stats.totalOnline + stats.totalOffline + stats.totalUnavailable
           const totalToScan = totalScanned + stats.pendingScan
 
           const data = {
-            resources: resources.slice(0, 100), // Top 100 for perf
-            totalResources: resources.length,
+            type: 'stats',
+            totalResources: lastResourceCount,
             serversScanned: totalScanned,
             serversWithIp: stats.totalWithIp,
             totalServers: stats.totalServers,
@@ -41,33 +45,49 @@ export async function GET() {
             timestamp: Date.now()
           }
 
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+          if (!isClosed) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+          }
         } catch (e) {
-          console.error('[SSE] Error:', e)
+          if (!isClosed) console.error('[SSE] Stats error:', e)
         }
       }
 
-      // Send immediately
+      // Send resources (heavier, every 10s)
+      const sendResources = async () => {
+        if (isClosed) return
+
+        try {
+          const resources = await getResources()
+          lastResourceCount = resources.length
+
+          const data = {
+            type: 'resources',
+            resources,
+            totalResources: resources.length,
+            timestamp: Date.now()
+          }
+
+          if (!isClosed) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+          }
+        } catch (e) {
+          if (!isClosed) console.error('[SSE] Resources error:', e)
+        }
+      }
+
+      // Send resources first (includes all data)
+      await sendResources()
       await sendStats()
 
-      // Then every 2 seconds
-      const interval = setInterval(sendStats, 2000)
-
-      // Cleanup on close
-      const cleanup = () => {
-        clearInterval(interval)
-        try {
-          controller.close()
-        } catch {
-          // Already closed
-        }
-      }
-
-      // Handle client disconnect (controller will error on enqueue)
-      setTimeout(() => {
-        // Max connection time: 5 minutes, then client should reconnect
-        cleanup()
-      }, 5 * 60 * 1000)
+      // Then intervals
+      statsInterval = setInterval(sendStats, 2000)
+      resourcesInterval = setInterval(sendResources, 10000)
+    },
+    cancel() {
+      isClosed = true
+      if (statsInterval) clearInterval(statsInterval)
+      if (resourcesInterval) clearInterval(resourcesInterval)
     }
   })
 
@@ -76,7 +96,7 @@ export async function GET() {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no', // Disable nginx buffering
+      'X-Accel-Buffering': 'no',
     },
   })
 }

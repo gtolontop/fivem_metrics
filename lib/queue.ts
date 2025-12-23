@@ -485,6 +485,7 @@ export async function submitScanResults(results: ScanResult[]): Promise<{ online
 /**
  * Met à jour l'agrégation des resources (appelé après chaque batch de scan)
  * Uses REAL player counts from protobuf (DATA_SERVER_PLAYERS), not sv_maxClients from scan
+ * Counts ALL scanned servers (online + offline) for stable stats like 5metrics
  */
 async function updateResourceAggregation(): Promise<void> {
   if (!redis) return
@@ -497,23 +498,27 @@ async function updateResourceAggregation(): Promise<void> {
       redis.hgetall(DATA_SERVER_PLAYERS)
     ])
 
-    const resourceMap = new Map<string, { servers: Set<string>, players: number }>()
+    const resourceMap = new Map<string, { servers: Set<string>, onlineServers: Set<string>, players: number }>()
 
     for (const [serverId, dataJson] of Object.entries(allServerResources)) {
-      // Ne compter que les serveurs ONLINE
-      if (statuses[serverId] !== 'online') continue
+      // Compter TOUS les serveurs scannés (online + offline) pour stats stables
+      // Mais players = seulement des serveurs online
+      const isOnline = statuses[serverId] === 'online'
 
       try {
         const data = JSON.parse(dataJson) as { resources: string[], players: number }
-        // Use REAL player count from protobuf, not the wrong sv_maxClients from scan
-        const realPlayers = realPlayerCounts[serverId] ? parseInt(realPlayerCounts[serverId]) : 0
+        // Use REAL player count from protobuf, only if online
+        const realPlayers = isOnline && realPlayerCounts[serverId] ? parseInt(realPlayerCounts[serverId]) : 0
 
         for (const resourceName of data.resources) {
           if (!resourceName || resourceName.length < 2) continue
 
-          const existing = resourceMap.get(resourceName) || { servers: new Set(), players: 0 }
+          const existing = resourceMap.get(resourceName) || { servers: new Set(), onlineServers: new Set(), players: 0 }
           existing.servers.add(serverId)
-          existing.players += realPlayers
+          if (isOnline) {
+            existing.onlineServers.add(serverId)
+            existing.players += realPlayers
+          }
           resourceMap.set(resourceName, existing)
         }
       } catch {
@@ -521,12 +526,13 @@ async function updateResourceAggregation(): Promise<void> {
       }
     }
 
-    // Convertir en array trié
+    // Convertir en array trié par nombre de serveurs (total, pas que online)
     const resources = Array.from(resourceMap.entries())
       .map(([name, data]) => ({
         name,
-        servers: data.servers.size,
-        players: data.players
+        servers: data.servers.size,          // Total servers (online + offline)
+        onlineServers: data.onlineServers.size,  // Only online servers
+        players: data.players                // Players only from online servers
       }))
       .sort((a, b) => b.servers - a.servers)
 

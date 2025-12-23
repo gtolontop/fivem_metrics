@@ -13,8 +13,9 @@ export interface FiveMServer {
 
 export interface FiveMResource {
   name: string
-  servers: number
-  players: number
+  servers: number        // Total servers (online + offline) for stable stats
+  onlineServers?: number // Only currently online servers
+  players: number        // Players only from online servers
 }
 
 // Protobuf varint decoder - supports up to 64-bit (10 bytes for negative numbers)
