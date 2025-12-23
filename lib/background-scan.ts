@@ -2,11 +2,11 @@
  * Background Scanner - Runs on Railway (can do HTTP requests)
  * CF Workers can't do HTTP, only HTTPS
  *
- * FAST MODE: 500 concurrent requests, continuous scanning
- * Target: 30k servers in ~3-5 minutes
+ * CONTINUOUS MODE: Scans all servers, then immediately starts a new cycle
+ * Target: 30k servers in ~3-5 minutes per cycle
  */
 
-import { getWorkerBatch, submitScanResults, getQueueStats, isQueueEnabled, ScanResult } from './queue'
+import { getWorkerBatch, submitScanResults, getQueueStats, requeueAllServersForScan, isQueueEnabled, ScanResult } from './queue'
 
 let isRunning = false
 let shouldStop = false
@@ -14,6 +14,7 @@ let shouldStop = false
 // Balanced: 300 concurrent with reliable timeout
 const BATCH_SIZE = 300
 const TIMEOUT_MS = 3000
+const CYCLE_DELAY_MS = 10000  // 10s pause between cycles
 
 async function scanServer(serverId: string, ip: string): Promise<ScanResult> {
   try {
@@ -54,68 +55,86 @@ async function runContinuousScan(): Promise<void> {
   isRunning = true
   shouldStop = false
 
-  console.log(`[BG-Scan] Starting FAST scan (${BATCH_SIZE} concurrent, ${TIMEOUT_MS}ms timeout)`)
+  console.log(`[BG-Scan] Starting CONTINUOUS scan (${BATCH_SIZE} concurrent, ${TIMEOUT_MS}ms timeout)`)
 
-  const startTime = Date.now()
-  let totalScanned = 0
-  let totalOnline = 0
-  let lastLogTime = Date.now()
+  let cycleNumber = 0
 
   while (!shouldStop) {
-    try {
-      // Get big batch of servers
-      const tasks = await getWorkerBatch('railway-scanner', 'scan', BATCH_SIZE)
+    cycleNumber++
+    const cycleStart = Date.now()
+    let cycleScanned = 0
+    let cycleOnline = 0
+    let lastLogTime = Date.now()
 
-      if (tasks.length === 0) {
-        // Queue empty, wait a bit and check again
-        await new Promise(r => setTimeout(r, 5000))
+    console.log(`[BG-Scan] === CYCLE ${cycleNumber} STARTING ===`)
 
-        const stats = await getQueueStats()
-        if (stats.pendingScan === 0) {
-          console.log(`[BG-Scan] Queue empty, waiting for more work...`)
-          await new Promise(r => setTimeout(r, 30000))
+    // Scan until queue is empty
+    while (!shouldStop) {
+      try {
+        // Get big batch of servers
+        const tasks = await getWorkerBatch('railway-scanner', 'scan', BATCH_SIZE)
+
+        if (tasks.length === 0) {
+          // Queue empty - cycle complete!
+          break
         }
-        continue
+
+        // Filter scan tasks with IPs
+        const scanTasks = tasks.filter(t => t.type === 'scan' && t.ip)
+        if (scanTasks.length === 0) continue
+
+        const batchStart = Date.now()
+
+        // Scan ALL in parallel with safe timeout wrapper
+        const results = await Promise.all(
+          scanTasks.map(t => scanServerSafe(t.serverId, t.ip!))
+        )
+
+        const batchTime = Date.now() - batchStart
+
+        // Submit results
+        const { online } = await submitScanResults(results)
+
+        cycleScanned += results.length
+        cycleOnline += online
+
+        // Log progress every 5 seconds
+        if (Date.now() - lastLogTime > 5000) {
+          const elapsed = (Date.now() - cycleStart) / 1000
+          const rate = Math.round(cycleScanned / elapsed)
+          const stats = await getQueueStats()
+          console.log(`[BG-Scan] Cycle ${cycleNumber}: ${cycleScanned} scanned (${cycleOnline} online) | ${rate}/s | ${stats.pendingScan} pending | batch ${batchTime}ms`)
+          lastLogTime = Date.now()
+        }
+
+      } catch (e) {
+        console.error('[BG-Scan] Error:', e)
+        await new Promise(r => setTimeout(r, 2000))
       }
+    }
 
-      // Filter scan tasks with IPs
-      const scanTasks = tasks.filter(t => t.type === 'scan' && t.ip)
-      if (scanTasks.length === 0) continue
+    // Cycle complete
+    const cycleDuration = Math.round((Date.now() - cycleStart) / 1000)
+    console.log(`[BG-Scan] === CYCLE ${cycleNumber} COMPLETE === ${cycleScanned} servers in ${cycleDuration}s (${cycleOnline} online)`)
 
-      console.log(`[BG-Scan] Scanning ${scanTasks.length} servers...`)
-      const batchStart = Date.now()
+    if (shouldStop) break
 
-      // Scan ALL in parallel with safe timeout wrapper
-      const results = await Promise.all(
-        scanTasks.map(t => scanServerSafe(t.serverId, t.ip!))
-      )
+    // Small pause before starting next cycle
+    console.log(`[BG-Scan] Waiting ${CYCLE_DELAY_MS / 1000}s before next cycle...`)
+    await new Promise(r => setTimeout(r, CYCLE_DELAY_MS))
 
-      const batchTime = Date.now() - batchStart
-      console.log(`[BG-Scan] Batch done in ${batchTime}ms`)
+    if (shouldStop) break
 
-      // Submit results
-      const { online } = await submitScanResults(results)
-
-      totalScanned += results.length
-      totalOnline += online
-
-      // Log progress every 5 seconds
-      if (Date.now() - lastLogTime > 5000) {
-        const elapsed = (Date.now() - startTime) / 1000
-        const rate = Math.round(totalScanned / elapsed)
-        const stats = await getQueueStats()
-        console.log(`[BG-Scan] ${totalScanned} scanned (${totalOnline} online) | ${rate}/s | ${stats.pendingScan} pending`)
-        lastLogTime = Date.now()
-      }
-
-    } catch (e) {
-      console.error('[BG-Scan] Error:', e)
-      await new Promise(r => setTimeout(r, 2000))
+    // Requeue all servers for next cycle
+    const requeued = await requeueAllServersForScan()
+    if (requeued === 0) {
+      console.log(`[BG-Scan] No servers to scan, waiting 30s...`)
+      await new Promise(r => setTimeout(r, 30000))
     }
   }
 
   isRunning = false
-  console.log(`[BG-Scan] Stopped. Total: ${totalScanned} scanned, ${totalOnline} online`)
+  console.log(`[BG-Scan] Scanner stopped after ${cycleNumber} cycles`)
 }
 
 export function startBackgroundScanner() {

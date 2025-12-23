@@ -287,7 +287,7 @@ export async function initializeQueuesWithDirectIps(
 }
 
 /**
- * Ajoute les serveurs avec IP à la queue de scan
+ * Ajoute les serveurs avec IP à la queue de scan (respecte les thresholds)
  */
 export async function queueServersForScan(): Promise<number> {
   if (!redis) return 0
@@ -338,6 +338,37 @@ export async function queueServersForScan(): Promise<number> {
 
   console.log(`[Queue] ${needsScan.length} servers queued for scan`)
   return needsScan.length
+}
+
+/**
+ * Re-queue TOUS les serveurs avec IP pour un nouveau cycle de scan
+ * Appelé quand le scanner a terminé un cycle complet
+ */
+export async function requeueAllServersForScan(): Promise<number> {
+  if (!redis) return 0
+
+  // Get all servers with IPs
+  const allIps = await redis.hgetall(DATA_IPS)
+  const serverIds = Object.keys(allIps).filter(id => allIps[id])
+
+  if (serverIds.length === 0) {
+    console.log('[Queue] No servers with IPs to requeue')
+    return 0
+  }
+
+  // Clear and repopulate scan queue
+  const pipeline = redis.pipeline()
+  pipeline.del(QUEUE_SCAN)
+
+  for (let i = 0; i < serverIds.length; i += 1000) {
+    const batch = serverIds.slice(i, i + 1000)
+    pipeline.rpush(QUEUE_SCAN, ...batch)
+  }
+
+  await pipeline.exec()
+
+  console.log(`[Queue] Requeued ALL ${serverIds.length} servers for new scan cycle`)
+  return serverIds.length
 }
 
 /**

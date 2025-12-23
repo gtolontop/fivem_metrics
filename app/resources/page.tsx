@@ -194,9 +194,6 @@ export default function ResourcesPage() {
                   <span className="flex items-center gap-1.5">
                     <Server size={14} />
                     <span className="text-white">{resource.servers.toLocaleString()}</span> servers
-                    {resource.onlineServers !== undefined && resource.onlineServers !== resource.servers && (
-                      <span className="text-green-400">({resource.onlineServers.toLocaleString()} online)</span>
-                    )}
                   </span>
                   <span className="flex items-center gap-1.5">
                     <Users size={14} />
