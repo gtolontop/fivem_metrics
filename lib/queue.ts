@@ -161,15 +161,31 @@ export async function initializeQueuesWithDirectIps(
   const now = Date.now().toString()
   console.log(`[FastInit] Starting with ${directIps.size} direct IPs, ${playerCounts.size} player counts, ${needsResolution.length} need resolution`)
 
-  // Clean stale data from previous runs (servers no longer in current list)
+  // Get previous server list to detect new/removed servers
   const currentServerSet = new Set(serverIds)
-  const [oldStatuses, oldResources, oldPlayers, oldIps] = await Promise.all([
+  const [oldServerIds, oldStatuses, oldResources, oldPlayers, oldIps] = await Promise.all([
+    redis.smembers(SET_ALL_SERVERS),
     redis.hkeys(DATA_STATUS),
     redis.hkeys(DATA_SERVER_RESOURCES),
     redis.hkeys(DATA_SERVER_PLAYERS),
     redis.hkeys(DATA_IPS)
   ])
 
+  const previousServerSet = new Set(oldServerIds)
+
+  // Find NEW servers (in current but not in previous)
+  const newServers: string[] = []
+  for (const id of serverIds) {
+    if (!previousServerSet.has(id)) newServers.push(id)
+  }
+
+  // Find REMOVED servers (in previous but not in current) - mark as offline
+  const removedServers: string[] = []
+  for (const id of oldServerIds) {
+    if (!currentServerSet.has(id)) removedServers.push(id)
+  }
+
+  // Clean stale data (servers no longer in protobuf)
   const staleServers = new Set<string>()
   for (const id of [...oldStatuses, ...oldResources, ...oldPlayers, ...oldIps]) {
     if (!currentServerSet.has(id)) staleServers.add(id)
@@ -184,7 +200,11 @@ export async function initializeQueuesWithDirectIps(
       pipeline.hdel(DATA_IPS, id)
     }
     await pipeline.exec()
-    console.log(`[FastInit] Cleaned ${staleServers.size} stale server entries`)
+  }
+
+  // Log server changes
+  if (newServers.length > 0 || removedServers.length > 0 || staleServers.size > 0) {
+    console.log(`[FastInit] Server changes: +${newServers.length} new, -${removedServers.length} removed, ${staleServers.size} cleaned`)
   }
 
   // Update global server set (replace with current list)
@@ -193,7 +213,7 @@ export async function initializeQueuesWithDirectIps(
     await redis.sadd(SET_ALL_SERVERS, ...serverIds)
     // Store fixed total for accurate progress display
     await redis.set(STATS_TOTAL_SERVERS, serverIds.length.toString())
-    console.log(`[FastInit] Total servers set to ${serverIds.length}`)
+    console.log(`[FastInit] Total servers: ${serverIds.length}`)
   }
 
   // Store all direct IPs immediately
@@ -433,10 +453,8 @@ export async function submitScanResults(results: ScanResult[]): Promise<{ online
     pipeline.hdel(SET_PROCESSING, result.serverId)
     pipeline.hset(TS_SCAN, result.serverId, now)
 
-    if (result.error) {
-      pipeline.hset(DATA_STATUS, result.serverId, 'unavailable')
-      error++
-    } else if (result.online) {
+    if (result.online) {
+      // Server responded with info.json = ONLINE
       pipeline.hset(DATA_STATUS, result.serverId, 'online')
       pipeline.hset(TS_LAST_SEEN, result.serverId, now)
 
@@ -449,6 +467,7 @@ export async function submitScanResults(results: ScanResult[]): Promise<{ online
       }
       online++
     } else {
+      // Server didn't respond (timeout, connection refused, etc) = OFFLINE
       pipeline.hset(DATA_STATUS, result.serverId, 'offline')
       offline++
     }
