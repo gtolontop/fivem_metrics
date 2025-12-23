@@ -160,8 +160,35 @@ export async function initializeQueuesWithDirectIps(
   const now = Date.now().toString()
   console.log(`[FastInit] Starting with ${directIps.size} direct IPs, ${playerCounts.size} player counts, ${needsResolution.length} need resolution`)
 
-  // Add all servers to global set
+  // Clean stale data from previous runs (servers no longer in current list)
+  const currentServerSet = new Set(serverIds)
+  const [oldStatuses, oldResources, oldPlayers, oldIps] = await Promise.all([
+    redis.hkeys(DATA_STATUS),
+    redis.hkeys(DATA_SERVER_RESOURCES),
+    redis.hkeys(DATA_SERVER_PLAYERS),
+    redis.hkeys(DATA_IPS)
+  ])
+
+  const staleServers = new Set<string>()
+  for (const id of [...oldStatuses, ...oldResources, ...oldPlayers, ...oldIps]) {
+    if (!currentServerSet.has(id)) staleServers.add(id)
+  }
+
+  if (staleServers.size > 0) {
+    const pipeline = redis.pipeline()
+    for (const id of staleServers) {
+      pipeline.hdel(DATA_STATUS, id)
+      pipeline.hdel(DATA_SERVER_RESOURCES, id)
+      pipeline.hdel(DATA_SERVER_PLAYERS, id)
+      pipeline.hdel(DATA_IPS, id)
+    }
+    await pipeline.exec()
+    console.log(`[FastInit] Cleaned ${staleServers.size} stale server entries`)
+  }
+
+  // Update global server set (replace with current list)
   if (serverIds.length > 0) {
+    await redis.del(SET_ALL_SERVERS)
     await redis.sadd(SET_ALL_SERVERS, ...serverIds)
   }
 
