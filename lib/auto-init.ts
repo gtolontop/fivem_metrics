@@ -14,18 +14,25 @@ let initializing = false
 let lastInitTime = 0
 let workersStarted = false
 const REINIT_INTERVAL = 10 * 60 * 1000 // Re-init toutes les 10 min
+const MIN_INIT_GAP = 30 * 1000 // Minimum 30s between inits
 
 export async function autoInit(): Promise<{ success: boolean, message: string, stats?: object }> {
   // Déjà en cours
   if (initializing) {
+    console.log('[Auto-Init] Skipped - already initializing')
     return { success: false, message: 'Initialization in progress...' }
   }
 
   // Pas besoin de re-init
   const now = Date.now()
   if (initialized && now - lastInitTime < REINIT_INTERVAL) {
-    const stats = await getQueueStats()
-    return { success: true, message: 'Already initialized', stats }
+    return { success: true, message: 'Already initialized' }
+  }
+
+  // Prevent rapid re-init attempts (rate limit protection)
+  if (lastInitTime > 0 && now - lastInitTime < MIN_INIT_GAP) {
+    console.log('[Auto-Init] Skipped - too soon since last init')
+    return { success: false, message: 'Too soon since last init' }
   }
 
   if (!isQueueEnabled()) {

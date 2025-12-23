@@ -11,8 +11,8 @@ import { getWorkerBatch, submitScanResults, getQueueStats, isQueueEnabled, ScanR
 let isRunning = false
 let shouldStop = false
 
-// FAST: 500 concurrent connections, 3s timeout
-const BATCH_SIZE = 500
+// Optimized: 200 concurrent (500 was too aggressive for Railway)
+const BATCH_SIZE = 200
 const TIMEOUT_MS = 3000
 
 async function scanServer(serverId: string, ip: string): Promise<ScanResult> {
@@ -77,10 +77,16 @@ async function runContinuousScan(): Promise<void> {
       const scanTasks = tasks.filter(t => t.type === 'scan' && t.ip)
       if (scanTasks.length === 0) continue
 
-      // Scan ALL in parallel (no chunking - full speed!)
+      console.log(`[BG-Scan] Scanning ${scanTasks.length} servers...`)
+      const batchStart = Date.now()
+
+      // Scan ALL in parallel
       const results = await Promise.all(
         scanTasks.map(t => scanServer(t.serverId, t.ip!))
       )
+
+      const batchTime = Date.now() - batchStart
+      console.log(`[BG-Scan] Batch done in ${batchTime}ms`)
 
       // Submit results
       const { online } = await submitScanResults(results)
