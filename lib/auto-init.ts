@@ -37,9 +37,9 @@ export async function autoInit(): Promise<{ success: boolean, message: string, s
   try {
     console.log('[Auto-Init] Starting with FAST IP extraction...')
 
-    // 1. Load servers WITH direct IPs from protobuf (instant!)
+    // 1. Load servers WITH direct IPs and player counts from protobuf (instant!)
     console.log('[Auto-Init] Loading servers from FiveM protobuf...')
-    const { servers, directIps, needsResolution, totalPlayers, totalServers } = await getServersWithIps()
+    const { servers, directIps, playerCounts, needsResolution, totalPlayers, totalServers } = await getServersWithIps()
 
     if (servers.length === 0) {
       return { success: false, message: 'Failed to load servers from FiveM' }
@@ -50,12 +50,13 @@ export async function autoInit(): Promise<{ success: boolean, message: string, s
     console.log(`[Auto-Init] Got ${directIps.size} direct IPs instantly! (${(directIps.size / servers.length * 100).toFixed(1)}%)`)
     console.log(`[Auto-Init] Only ${needsResolution.length} need API resolution (${(needsResolution.length / servers.length * 100).toFixed(1)}%)`)
 
-    // 2. Initialize queues with direct IPs (FAST path)
-    console.log('[Auto-Init] Storing direct IPs and queuing for scan...')
+    // 2. Initialize queues with direct IPs and player counts (FAST path)
+    console.log('[Auto-Init] Storing direct IPs, player counts, and queuing for scan...')
     const serverIds = servers.map(s => s.id)
     const { directIpsStored, needsApiFetch, queuedForScan } = await initializeQueuesWithDirectIps(
       serverIds,
       directIps,
+      playerCounts,
       needsResolution
     )
 

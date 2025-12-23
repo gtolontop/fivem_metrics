@@ -18,6 +18,7 @@ const DATA_IPS = 'data:ips'                       // cfxId -> IP (permanent, tou
 const DATA_STATUS = 'data:server_status'          // cfxId -> 'online' | 'offline' | 'unavailable'
 const DATA_RESOURCES = 'data:resources'           // JSON des ressources agrégées
 const DATA_SERVER_RESOURCES = 'data:server_resources' // cfxId -> JSON des resources du serveur
+const DATA_SERVER_PLAYERS = 'data:server_players' // cfxId -> real player count from protobuf
 
 // Timestamps (Hashes)
 const TS_IP_FETCH = 'ts:ip_fetch'                 // cfxId -> timestamp dernière récup IP
@@ -146,16 +147,18 @@ export async function initializeQueues(serverIds: string[]): Promise<{ added: nu
  * FAST: Initialize queues with direct IPs from protobuf
  * Stores ~89% of IPs instantly without API calls!
  * Only servers with URLs need resolution via API
+ * Also stores real player counts from protobuf for accurate aggregation
  */
 export async function initializeQueuesWithDirectIps(
   serverIds: string[],
   directIps: Map<string, string>,
+  playerCounts: Map<string, number>,
   needsResolution: string[]
 ): Promise<{ directIpsStored: number, needsApiFetch: number, queuedForScan: number }> {
   if (!redis) return { directIpsStored: 0, needsApiFetch: 0, queuedForScan: 0 }
 
   const now = Date.now().toString()
-  console.log(`[FastInit] Starting with ${directIps.size} direct IPs, ${needsResolution.length} need resolution`)
+  console.log(`[FastInit] Starting with ${directIps.size} direct IPs, ${playerCounts.size} player counts, ${needsResolution.length} need resolution`)
 
   // Add all servers to global set
   if (serverIds.length > 0) {
@@ -178,6 +181,22 @@ export async function initializeQueuesWithDirectIps(
 
     await pipeline.exec()
     console.log(`[FastInit] Stored ${directIps.size} direct IPs`)
+  }
+
+  // Store player counts from protobuf (for accurate resource aggregation)
+  if (playerCounts.size > 0) {
+    const pipeline = redis.pipeline()
+
+    const entries = Array.from(playerCounts.entries())
+    for (let i = 0; i < entries.length; i += 500) {
+      const batch = entries.slice(i, i + 500)
+      for (const [serverId, players] of batch) {
+        pipeline.hset(DATA_SERVER_PLAYERS, serverId, players.toString())
+      }
+    }
+
+    await pipeline.exec()
+    console.log(`[FastInit] Stored ${playerCounts.size} player counts`)
   }
 
   // Queue servers with direct IPs for scanning immediately
@@ -415,15 +434,17 @@ export async function submitScanResults(results: ScanResult[]): Promise<{ online
 
 /**
  * Met à jour l'agrégation des resources (appelé après chaque batch de scan)
+ * Uses REAL player counts from protobuf (DATA_SERVER_PLAYERS), not sv_maxClients from scan
  */
 async function updateResourceAggregation(): Promise<void> {
   if (!redis) return
 
   try {
-    // Récupérer les resources ET les statuts
-    const [allServerResources, statuses] = await Promise.all([
+    // Récupérer les resources, statuts ET vrais player counts du protobuf
+    const [allServerResources, statuses, realPlayerCounts] = await Promise.all([
       redis.hgetall(DATA_SERVER_RESOURCES),
-      redis.hgetall(DATA_STATUS)
+      redis.hgetall(DATA_STATUS),
+      redis.hgetall(DATA_SERVER_PLAYERS)
     ])
 
     const resourceMap = new Map<string, { servers: Set<string>, players: number }>()
@@ -434,12 +455,15 @@ async function updateResourceAggregation(): Promise<void> {
 
       try {
         const data = JSON.parse(dataJson) as { resources: string[], players: number }
+        // Use REAL player count from protobuf, not the wrong sv_maxClients from scan
+        const realPlayers = realPlayerCounts[serverId] ? parseInt(realPlayerCounts[serverId]) : 0
+
         for (const resourceName of data.resources) {
           if (!resourceName || resourceName.length < 2) continue
 
           const existing = resourceMap.get(resourceName) || { servers: new Set(), players: 0 }
           existing.servers.add(serverId)
-          existing.players += data.players
+          existing.players += realPlayers
           resourceMap.set(resourceName, existing)
         }
       } catch {
@@ -660,6 +684,7 @@ export async function resetAll(): Promise<void> {
     DATA_STATUS,
     DATA_RESOURCES,
     DATA_SERVER_RESOURCES,
+    DATA_SERVER_PLAYERS,
     TS_IP_FETCH,
     TS_SCAN,
     TS_LAST_SEEN,

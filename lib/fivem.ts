@@ -481,6 +481,7 @@ function isDirectIp(endpoint: string): boolean {
 export async function getServersWithIps(): Promise<{
   servers: FiveMServerSlim[]
   directIps: Map<string, string>  // cfxId -> IP:port (89% of servers)
+  playerCounts: Map<string, number>  // cfxId -> real player count from protobuf
   needsResolution: string[]       // cfxIds with URLs that need DNS/API lookup (11%)
   totalPlayers: number
   totalServers: number
@@ -496,7 +497,7 @@ export async function getServersWithIps(): Promise<{
 
     if (!res.ok) {
       console.error('FiveM API error:', res.status)
-      return { servers: [], directIps: new Map(), needsResolution: [], totalPlayers: 0, totalServers: 0 }
+      return { servers: [], directIps: new Map(), playerCounts: new Map(), needsResolution: [], totalPlayers: 0, totalServers: 0 }
     }
 
     const buffer = await res.arrayBuffer()
@@ -505,13 +506,16 @@ export async function getServersWithIps(): Promise<{
     const allServers = parseServers(buffer)
     console.log('[FastIP] Parsed', allServers.length, 'servers')
 
-    // Extract IPs from field 18
+    // Extract IPs and player counts from protobuf
     const directIps = new Map<string, string>()
+    const playerCounts = new Map<string, number>()
     const needsResolution: string[] = []
     let totalPlayers = 0
 
     for (const server of allServers) {
       totalPlayers += server.players
+      // Store real player count from protobuf
+      playerCounts.set(server.id, server.players)
 
       if (server.connectEndpoint) {
         if (isDirectIp(server.connectEndpoint)) {
@@ -546,12 +550,13 @@ export async function getServersWithIps(): Promise<{
     return {
       servers: cleanServers,
       directIps,
+      playerCounts,
       needsResolution,
       totalPlayers,
       totalServers: cleanServers.length
     }
   } catch (e) {
     console.error('Failed to fetch FiveM data:', e)
-    return { servers: [], directIps: new Map(), needsResolution: [], totalPlayers: 0, totalServers: 0 }
+    return { servers: [], directIps: new Map(), playerCounts: new Map(), needsResolution: [], totalPlayers: 0, totalServers: 0 }
   }
 }
