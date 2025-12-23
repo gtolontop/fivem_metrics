@@ -689,14 +689,29 @@ export async function getAllIps(): Promise<Map<string, string>> {
   return new Map(Object.entries(data))
 }
 
+// In-memory cache for resources (5s TTL - short because updated frequently)
+let resourcesCache: { data: Array<{ name: string, servers: number, onlineServers: number, players: number }>, expires: number } | null = null
+const RESOURCES_CACHE_TTL = 5 * 1000 // 5 seconds
+
 /**
- * Récupère les resources agrégées
+ * Récupère les resources agrégées (cached)
  */
 export async function getResources(): Promise<Array<{ name: string, servers: number, onlineServers: number, players: number }>> {
   if (!redis) return []
+
+  // Check cache
+  if (resourcesCache && resourcesCache.expires > Date.now()) {
+    return resourcesCache.data
+  }
+
   try {
     const data = await redis.get(DATA_RESOURCES)
-    return data ? JSON.parse(data) : []
+    const resources = data ? JSON.parse(data) : []
+
+    // Update cache
+    resourcesCache = { data: resources, expires: Date.now() + RESOURCES_CACHE_TTL }
+
+    return resources
   } catch {
     return []
   }
@@ -706,37 +721,44 @@ export async function getResources(): Promise<Array<{ name: string, servers: num
  * Recherche dans les resources (server-side search for 800k+ resources)
  * @param query - Search query (case insensitive)
  * @param limit - Max results to return
+ * @param offset - Skip first N results (for pagination)
  */
 export async function searchResources(
   query: string,
-  limit: number = 100
-): Promise<Array<{ name: string, servers: number, onlineServers: number, players: number }>> {
-  if (!redis) return []
+  limit: number = 100,
+  offset: number = 0
+): Promise<{ resources: Array<{ name: string, servers: number, onlineServers: number, players: number }>, total: number }> {
+  if (!redis) return { resources: [], total: 0 }
 
   try {
     const data = await redis.get(DATA_RESOURCES)
-    if (!data) return []
+    if (!data) return { resources: [], total: 0 }
 
-    const resources = JSON.parse(data) as Array<{ name: string, servers: number, onlineServers: number, players: number }>
+    const allResources = JSON.parse(data) as Array<{ name: string, servers: number, onlineServers: number, players: number }>
     const q = query.toLowerCase().trim()
 
     if (!q) {
-      // No query = return top resources
-      return resources.slice(0, limit)
-    }
-
-    // Filter and limit results
-    const results: typeof resources = []
-    for (const r of resources) {
-      if (r.name.toLowerCase().includes(q)) {
-        results.push(r)
-        if (results.length >= limit) break
+      // No query = return paginated top resources
+      return {
+        resources: allResources.slice(offset, offset + limit),
+        total: allResources.length
       }
     }
 
-    return results
+    // Filter first, then paginate
+    const filtered: typeof allResources = []
+    for (const r of allResources) {
+      if (r.name.toLowerCase().includes(q)) {
+        filtered.push(r)
+      }
+    }
+
+    return {
+      resources: filtered.slice(offset, offset + limit),
+      total: filtered.length
+    }
   } catch {
-    return []
+    return { resources: [], total: 0 }
   }
 }
 

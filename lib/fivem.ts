@@ -358,7 +358,17 @@ export async function batchGetServerInfo(
   return results
 }
 
+// In-memory cache for server details (30s TTL)
+const serverCache = new Map<string, { data: FiveMServerFull, expires: number }>()
+const SERVER_CACHE_TTL = 30 * 1000 // 30 seconds
+
 export async function getServerDetails(serverId: string): Promise<FiveMServerFull | null> {
+  // Check cache first
+  const cached = serverCache.get(serverId)
+  if (cached && cached.expires > Date.now()) {
+    return cached.data
+  }
+
   try {
     const res = await fetch(`https://servers-frontend.fivem.net/api/servers/single/${serverId}`, {
       headers: {
@@ -371,7 +381,7 @@ export async function getServerDetails(serverId: string): Promise<FiveMServerFul
 
     const data = await res.json()
 
-    return {
+    const server: FiveMServerFull = {
       id: data.EndPoint || serverId,
       name: stripColorCodes(data.Data?.hostname || data.Data?.vars?.sv_projectName || serverId),
       players: data.Data?.clients || 0,
@@ -382,6 +392,19 @@ export async function getServerDetails(serverId: string): Promise<FiveMServerFul
       vars: data.Data?.vars || {},
       server: data.Data?.server || ''
     }
+
+    // Store in cache
+    serverCache.set(serverId, { data: server, expires: Date.now() + SERVER_CACHE_TTL })
+
+    // Cleanup old entries periodically (keep cache size reasonable)
+    if (serverCache.size > 500) {
+      const now = Date.now()
+      for (const [key, value] of serverCache.entries()) {
+        if (value.expires < now) serverCache.delete(key)
+      }
+    }
+
+    return server
   } catch (e) {
     console.error('Failed to fetch server details:', e)
     return null

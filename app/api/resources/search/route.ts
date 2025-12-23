@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { searchResources, getResources, isQueueEnabled } from '@/lib/queue'
+import { searchResources, isQueueEnabled } from '@/lib/queue'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,18 +10,17 @@ export async function GET(request: NextRequest) {
 
   const searchParams = request.nextUrl.searchParams
   const query = searchParams.get('q') || ''
-  const limit = Math.min(parseInt(searchParams.get('limit') || '100'), 500)
+  const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 200)
+  const offset = parseInt(searchParams.get('offset') || '0')
 
-  // If no query, get total count from all resources
-  const [results, allResources] = await Promise.all([
-    searchResources(query, limit),
-    query ? getResources() : Promise.resolve([]) // Only get total if searching
-  ])
+  const { resources, total } = await searchResources(query, limit, offset)
 
   return NextResponse.json({
-    resources: results,
-    total: query ? allResources.length : results.length,
+    resources,
+    total,
     query,
-    limit
+    limit,
+    offset,
+    hasMore: offset + resources.length < total
   })
 }

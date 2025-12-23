@@ -53,7 +53,7 @@ export async function GET() {
         }
       }
 
-      // Send resources (heavier, every 10s)
+      // Send resources (only TOP 100 for perf, every 10s)
       const sendResources = async () => {
         if (isClosed) return
 
@@ -63,7 +63,7 @@ export async function GET() {
 
           const data = {
             type: 'resources',
-            resources,
+            resources: resources.slice(0, 100),  // Only top 100 for SSE
             totalResources: resources.length,
             timestamp: Date.now()
           }
