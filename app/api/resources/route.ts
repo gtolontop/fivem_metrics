@@ -24,14 +24,16 @@ export async function GET() {
 
   const totalScanned = stats.totalOnline + stats.totalOffline + stats.totalUnavailable
 
-  // IP collection progress (phase 1)
+  // IP collection progress (phase 1) - cap at 100%
   const ipProgress = stats.totalServers > 0
-    ? Math.round((stats.totalWithIp / stats.totalServers) * 100)
+    ? Math.min(100, Math.round((stats.totalWithIp / stats.totalServers) * 100))
     : 0
 
-  // Scan progress (phase 2 - only servers with IPs)
-  const scanProgress = stats.totalWithIp > 0
-    ? Math.round((totalScanned / stats.totalWithIp) * 100)
+  // Scan progress (phase 2) - based on pending vs scanned, cap at 100%
+  // Use: scanned / (scanned + pending) for accurate progress
+  const totalToScan = totalScanned + stats.pendingScan
+  const scanProgress = totalToScan > 0
+    ? Math.min(100, Math.round((totalScanned / totalToScan) * 100))
     : 0
 
   return NextResponse.json({

@@ -31,6 +31,7 @@ const SET_PROCESSING = 'set:processing'           // Serveurs en cours de traite
 
 // Stats
 const STATS_KEY = 'stats:global'
+const STATS_TOTAL_SERVERS = 'stats:total_servers'  // Fixed total from last init
 
 // ============================================================================
 // CONFIG
@@ -190,6 +191,9 @@ export async function initializeQueuesWithDirectIps(
   if (serverIds.length > 0) {
     await redis.del(SET_ALL_SERVERS)
     await redis.sadd(SET_ALL_SERVERS, ...serverIds)
+    // Store fixed total for accurate progress display
+    await redis.set(STATS_TOTAL_SERVERS, serverIds.length.toString())
+    console.log(`[FastInit] Total servers set to ${serverIds.length}`)
   }
 
   // Store all direct IPs immediately
@@ -537,18 +541,21 @@ export async function getQueueStats(): Promise<QueueStats> {
   const [
     pendingIpFetch,
     pendingScan,
-    totalServers,
+    storedTotal,
     totalWithIp,
     statuses,
     processing
   ] = await Promise.all([
     redis.llen(QUEUE_IP_FETCH),
     redis.llen(QUEUE_SCAN),
-    redis.scard(SET_ALL_SERVERS),
+    redis.get(STATS_TOTAL_SERVERS),  // Use fixed total from last init
     redis.hlen(DATA_IPS),
     redis.hgetall(DATA_STATUS),
     redis.hlen(SET_PROCESSING)
   ])
+
+  // Use stored total, fallback to counting IPs if not set
+  const totalServers = storedTotal ? parseInt(storedTotal) : totalWithIp
 
   let totalOnline = 0
   let totalOffline = 0
@@ -717,7 +724,8 @@ export async function resetAll(): Promise<void> {
     TS_LAST_SEEN,
     SET_ALL_SERVERS,
     SET_PROCESSING,
-    STATS_KEY
+    STATS_KEY,
+    STATS_TOTAL_SERVERS
   )
 
   console.log('[Queue] ALL DATA RESET')
