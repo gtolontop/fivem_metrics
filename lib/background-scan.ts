@@ -17,14 +17,11 @@ const TIMEOUT_MS = 3000
 
 async function scanServer(serverId: string, ip: string): Promise<ScanResult> {
   try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS)
-
+    // Use AbortSignal.timeout for reliable timeout (Node 18+)
     const res = await fetch(`http://${ip}/info.json`, {
-      signal: controller.signal,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: { 'User-Agent': 'Mozilla/5.0' }
     })
-    clearTimeout(timeout)
 
     if (!res.ok) {
       return { serverId, ip, online: false, error: `http_${res.status}` }
@@ -38,9 +35,17 @@ async function scanServer(serverId: string, ip: string): Promise<ScanResult> {
       resources: data.resources || [],
       players: data.vars?.sv_maxClients ? parseInt(data.vars.sv_maxClients) : 0
     }
-  } catch (e) {
-    return { serverId, ip, online: false, error: e instanceof Error ? e.message : 'unknown' }
+  } catch {
+    return { serverId, ip, online: false, error: 'timeout' }
   }
+}
+
+// Wrapper with hard timeout fallback
+async function scanServerSafe(serverId: string, ip: string): Promise<ScanResult> {
+  const timeoutPromise = new Promise<ScanResult>((resolve) => {
+    setTimeout(() => resolve({ serverId, ip, online: false, error: 'hard_timeout' }), TIMEOUT_MS + 1000)
+  })
+  return Promise.race([scanServer(serverId, ip), timeoutPromise])
 }
 
 async function runContinuousScan(): Promise<void> {
@@ -80,9 +85,9 @@ async function runContinuousScan(): Promise<void> {
       console.log(`[BG-Scan] Scanning ${scanTasks.length} servers...`)
       const batchStart = Date.now()
 
-      // Scan ALL in parallel
+      // Scan ALL in parallel with safe timeout wrapper
       const results = await Promise.all(
-        scanTasks.map(t => scanServer(t.serverId, t.ip!))
+        scanTasks.map(t => scanServerSafe(t.serverId, t.ip!))
       )
 
       const batchTime = Date.now() - batchStart
