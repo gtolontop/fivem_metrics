@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { ArrowLeft, Server, Users } from 'lucide-react'
+import { ArrowLeft, Server, Users, Package, TrendingUp } from 'lucide-react'
 
 interface ServerInfo {
   id: string
@@ -13,11 +13,21 @@ interface ServerInfo {
   gametype: string
 }
 
+interface RelatedResource {
+  name: string
+  servers: number
+  players: number
+}
+
 interface Data {
   name: string
   servers: ServerInfo[]
   serverCount: number
+  onlineServers: number
   totalPlayers: number
+  prefix: string | null
+  relatedResources: RelatedResource[]
+  scanProgress: number
 }
 
 export default function ResourcePage() {
@@ -62,31 +72,99 @@ export default function ResourcePage() {
         <ArrowLeft size={18} /> Back
       </Link>
 
+      {/* Header */}
       <div className="bg-card border border-border rounded-xl p-8 mb-6">
-        <h1 className="text-2xl font-mono font-semibold mb-2">{data.name}</h1>
-        <p className="text-muted">FiveM Resource</p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-mono font-semibold mb-2">{data.name}</h1>
+            <p className="text-muted">FiveM Resource</p>
+            {data.prefix && (
+              <p className="text-sm text-muted mt-2">
+                Creator prefix: <span className="text-white font-mono">{data.prefix}</span>
+              </p>
+            )}
+          </div>
+          {data.scanProgress < 100 && (
+            <div className="text-right">
+              <p className="text-xs text-muted">Scan progress</p>
+              <p className="text-lg font-semibold">{data.scanProgress}%</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-8">
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <div className="bg-card border border-border rounded-xl p-6">
           <div className="flex items-center gap-2 text-muted mb-2">
             <Server size={16} />
-            <p className="text-sm">Servers</p>
+            <p className="text-sm">Total Servers</p>
           </div>
-          <p className="text-2xl font-semibold">{data.serverCount}</p>
+          <p className="text-2xl font-semibold">{data.serverCount.toLocaleString()}</p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-6">
+          <div className="flex items-center gap-2 text-muted mb-2">
+            <TrendingUp size={16} />
+            <p className="text-sm">Online Now</p>
+          </div>
+          <p className="text-2xl font-semibold text-green-400">{data.onlineServers.toLocaleString()}</p>
         </div>
         <div className="bg-card border border-border rounded-xl p-6">
           <div className="flex items-center gap-2 text-muted mb-2">
             <Users size={16} />
-            <p className="text-sm">Players</p>
+            <p className="text-sm">Total Players</p>
           </div>
           <p className="text-2xl font-semibold">{data.totalPlayers.toLocaleString()}</p>
         </div>
+        <div className="bg-card border border-border rounded-xl p-6">
+          <div className="flex items-center gap-2 text-muted mb-2">
+            <Package size={16} />
+            <p className="text-sm">Avg Players/Server</p>
+          </div>
+          <p className="text-2xl font-semibold">
+            {data.onlineServers > 0 ? Math.round(data.totalPlayers / data.onlineServers) : 0}
+          </p>
+        </div>
       </div>
 
+      {/* Related Resources */}
+      {data.relatedResources.length > 0 && (
+        <div className="bg-card border border-border rounded-xl p-6 mb-8">
+          <h2 className="text-lg font-medium mb-4 flex items-center gap-2">
+            <Package size={18} />
+            Related by creator
+            <span className="text-muted font-mono text-sm">({data.prefix})</span>
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            {data.relatedResources.map(r => (
+              <Link
+                key={r.name}
+                href={`/resources/${encodeURIComponent(r.name)}`}
+                className="bg-bg rounded-xl p-4 hover:bg-zinc-800 transition-colors group"
+              >
+                <p className="font-mono text-sm truncate group-hover:text-white transition-colors mb-2">
+                  {r.name}
+                </p>
+                <div className="flex items-center gap-3 text-xs text-muted">
+                  <span className="flex items-center gap-1">
+                    <Server size={12} />
+                    {r.servers.toLocaleString()}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Users size={12} />
+                    {r.players.toLocaleString()}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Servers List */}
       {data.servers.length > 0 && (
         <div>
-          <h2 className="text-lg font-medium mb-4">Servers using this resource</h2>
+          <h2 className="text-lg font-medium mb-4">Servers using this resource ({data.servers.length} online)</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {data.servers.map(server => (
               <Link
@@ -100,10 +178,18 @@ export default function ResourcePage() {
                 {server.gametype && (
                   <p className="text-sm text-muted truncate mb-3">{server.gametype}</p>
                 )}
-                <div className="flex items-center gap-2 text-sm text-muted">
-                  <Users size={14} />
-                  <span className="text-white">{server.players.toLocaleString()}</span>
-                  <span>/ {server.maxPlayers}</span>
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2 text-muted">
+                    <Users size={14} />
+                    <span className="text-white">{server.players.toLocaleString()}</span>
+                    <span>/ {server.maxPlayers}</span>
+                  </div>
+                  <div className="h-1.5 w-16 bg-bg rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-accent rounded-full"
+                      style={{ width: `${Math.min((server.players / server.maxPlayers) * 100, 100)}%` }}
+                    />
+                  </div>
                 </div>
               </Link>
             ))}
@@ -113,7 +199,11 @@ export default function ResourcePage() {
 
       {data.servers.length === 0 && (
         <div className="bg-card border border-border rounded-xl p-8 text-center">
-          <p className="text-muted">No servers found using this resource in the top 100 servers.</p>
+          <p className="text-muted">
+            {data.serverCount > 0
+              ? `${data.serverCount} servers have this resource, but none are currently online.`
+              : 'No servers found using this resource yet.'}
+          </p>
         </div>
       )}
     </div>
