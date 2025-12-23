@@ -346,11 +346,18 @@ async function updateResourceAggregation(): Promise<void> {
   if (!redis) return
 
   try {
-    const allServerResources = await redis.hgetall(DATA_SERVER_RESOURCES)
+    // Récupérer les resources ET les statuts
+    const [allServerResources, statuses] = await Promise.all([
+      redis.hgetall(DATA_SERVER_RESOURCES),
+      redis.hgetall(DATA_STATUS)
+    ])
 
     const resourceMap = new Map<string, { servers: Set<string>, players: number }>()
 
     for (const [serverId, dataJson] of Object.entries(allServerResources)) {
+      // Ne compter que les serveurs ONLINE
+      if (statuses[serverId] !== 'online') continue
+
       try {
         const data = JSON.parse(dataJson) as { resources: string[], players: number }
         for (const resourceName of data.resources) {
@@ -480,16 +487,22 @@ export async function getServerStatus(serverId: string): Promise<ServerStatus> {
 }
 
 /**
- * Récupère les serveurs qui ont une resource spécifique
+ * Récupère les serveurs ONLINE qui ont une resource spécifique
  */
 export async function getServersWithResource(resourceName: string): Promise<string[]> {
   if (!redis) return []
 
   try {
-    const allServerResources = await redis.hgetall(DATA_SERVER_RESOURCES)
+    const [allServerResources, statuses] = await Promise.all([
+      redis.hgetall(DATA_SERVER_RESOURCES),
+      redis.hgetall(DATA_STATUS)
+    ])
     const servers: string[] = []
 
     for (const [serverId, dataJson] of Object.entries(allServerResources)) {
+      // Ne retourner que les serveurs ONLINE
+      if (statuses[serverId] !== 'online') continue
+
       try {
         const data = JSON.parse(dataJson) as { resources: string[], players: number }
         if (data.resources.includes(resourceName)) {
