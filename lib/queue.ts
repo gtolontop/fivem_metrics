@@ -624,11 +624,49 @@ export async function getAllIps(): Promise<Map<string, string>> {
 /**
  * Récupère les resources agrégées
  */
-export async function getResources(): Promise<Array<{ name: string, servers: number, players: number }>> {
+export async function getResources(): Promise<Array<{ name: string, servers: number, onlineServers: number, players: number }>> {
   if (!redis) return []
   try {
     const data = await redis.get(DATA_RESOURCES)
     return data ? JSON.parse(data) : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Recherche dans les resources (server-side search for 800k+ resources)
+ * @param query - Search query (case insensitive)
+ * @param limit - Max results to return
+ */
+export async function searchResources(
+  query: string,
+  limit: number = 100
+): Promise<Array<{ name: string, servers: number, onlineServers: number, players: number }>> {
+  if (!redis) return []
+
+  try {
+    const data = await redis.get(DATA_RESOURCES)
+    if (!data) return []
+
+    const resources = JSON.parse(data) as Array<{ name: string, servers: number, onlineServers: number, players: number }>
+    const q = query.toLowerCase().trim()
+
+    if (!q) {
+      // No query = return top resources
+      return resources.slice(0, limit)
+    }
+
+    // Filter and limit results
+    const results: typeof resources = []
+    for (const r of resources) {
+      if (r.name.toLowerCase().includes(q)) {
+        results.push(r)
+        if (results.length >= limit) break
+      }
+    }
+
+    return results
   } catch {
     return []
   }

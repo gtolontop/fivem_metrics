@@ -1,23 +1,75 @@
 'use client'
 
-import { useState, useMemo } from 'react'
-import { Search, Server, Users, Wifi, WifiOff } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Search, Server, Users, Wifi, WifiOff, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { useRealtimeStats } from '@/lib/useRealtimeStats'
 import { AnimatedCounter, AnimatedProgress } from '@/components/AnimatedCounter'
+import type { FiveMResource } from '@/lib/fivem'
 
 export default function ResourcesPage() {
   const { data, connected } = useRealtimeStats()
   const [search, setSearch] = useState('')
-  const [limit, setLimit] = useState(100)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [searchResults, setSearchResults] = useState<FiveMResource[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [displayLimit, setDisplayLimit] = useState(100)
+  const debounceRef = useRef<NodeJS.Timeout | null>(null)
 
-  const filtered = useMemo(() => {
-    if (!data) return []
-    const q = search.toLowerCase()
-    return data.resources
-      .filter(r => r.name.toLowerCase().includes(q))
-      .slice(0, limit)
-  }, [data, search, limit])
+  // Debounce search input
+  useEffect(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+    }
+
+    if (!search.trim()) {
+      setDebouncedSearch('')
+      setSearchResults(null)
+      return
+    }
+
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(search.trim())
+    }, 300)
+
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+      }
+    }
+  }, [search])
+
+  // Fetch search results from API
+  useEffect(() => {
+    if (!debouncedSearch) {
+      setSearchResults(null)
+      return
+    }
+
+    const controller = new AbortController()
+    setSearching(true)
+
+    fetch(`/api/resources/search?q=${encodeURIComponent(debouncedSearch)}&limit=200`, {
+      signal: controller.signal
+    })
+      .then(res => res.json())
+      .then(data => {
+        setSearchResults(data.resources)
+        setSearching(false)
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') {
+          console.error('Search error:', err)
+          setSearching(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [debouncedSearch])
+
+  // Resources to display: search results or SSE data
+  const displayResources = debouncedSearch ? searchResults : data?.resources.slice(0, displayLimit)
+  const totalResources = data?.totalResources ?? 0
 
   if (!data) {
     return (
@@ -46,7 +98,7 @@ export default function ResourcesPage() {
         </div>
       </div>
       <p className="text-muted mb-4">
-        <AnimatedCounter value={data.totalResources} className="text-white" /> unique resources from <AnimatedCounter value={data.serversOnline} className="text-white" /> online servers
+        <AnimatedCounter value={totalResources} className="text-white" /> unique resources from <AnimatedCounter value={data.serversOnline} className="text-white" /> online servers
       </p>
 
       {/* Progress Status */}
@@ -90,29 +142,45 @@ export default function ResourcesPage() {
         )}
       </div>
 
-      {data.resources.length === 0 ? (
+      {/* Search Bar */}
+      <div className="relative mb-6">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted" size={18} />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={`Search ${totalResources.toLocaleString()} resources...`}
+          className="w-full bg-card border border-border rounded-xl py-3 pl-12 pr-12 text-white placeholder:text-muted focus:outline-none focus:border-zinc-600 transition-colors"
+        />
+        {searching && (
+          <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 text-muted animate-spin" size={18} />
+        )}
+      </div>
+
+      {/* Results info */}
+      <p className="text-sm text-muted mb-6">
+        {debouncedSearch ? (
+          searching ? (
+            'Searching...'
+          ) : (
+            <>Found {searchResults?.length ?? 0} resources matching "{debouncedSearch}"</>
+          )
+        ) : (
+          <>Showing top {displayResources?.length ?? 0} of {totalResources.toLocaleString()} resources</>
+        )}
+      </p>
+
+      {/* Resource Grid */}
+      {!displayResources || displayResources.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-8 text-center">
-          <p className="text-muted">No resources found yet. Scanning in progress...</p>
+          <p className="text-muted">
+            {debouncedSearch ? 'No resources found matching your search.' : 'No resources found yet. Scanning in progress...'}
+          </p>
         </div>
       ) : (
         <>
-          <div className="relative mb-8">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted" size={18} />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search resources..."
-              className="w-full bg-card border border-border rounded-xl py-3 pl-12 pr-4 text-white placeholder:text-muted focus:outline-none focus:border-zinc-600 transition-colors"
-            />
-          </div>
-
-          <p className="text-sm text-muted mb-6">
-            Showing {filtered.length} of {data.resources.length} resources
-          </p>
-
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map(resource => (
+            {displayResources.map(resource => (
               <Link
                 key={resource.name}
                 href={`/resources/${encodeURIComponent(resource.name)}`}
@@ -127,7 +195,7 @@ export default function ResourcesPage() {
                     <Server size={14} />
                     <span className="text-white">{resource.servers.toLocaleString()}</span> servers
                     {resource.onlineServers !== undefined && resource.onlineServers !== resource.servers && (
-                      <span className="text-green-400">({resource.onlineServers} online)</span>
+                      <span className="text-green-400">({resource.onlineServers.toLocaleString()} online)</span>
                     )}
                   </span>
                   <span className="flex items-center gap-1.5">
@@ -139,10 +207,11 @@ export default function ResourcesPage() {
             ))}
           </div>
 
-          {limit < data.resources.length && search === '' && (
+          {/* Load More - only when not searching */}
+          {!debouncedSearch && displayLimit < totalResources && (
             <div className="text-center mt-8">
               <button
-                onClick={() => setLimit(l => l + 100)}
+                onClick={() => setDisplayLimit(l => l + 100)}
                 className="px-6 py-2 bg-card border border-border rounded-xl hover:border-zinc-600 transition-colors"
               >
                 Load More
