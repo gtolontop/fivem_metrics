@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react'
 import { Search, Server, Users, Wifi, WifiOff } from 'lucide-react'
 import Link from 'next/link'
 import { useRealtimeStats } from '@/lib/useRealtimeStats'
+import { AnimatedCounter, AnimatedProgress } from '@/components/AnimatedCounter'
 
 export default function ResourcesPage() {
   const { data, connected } = useRealtimeStats()
@@ -45,7 +46,7 @@ export default function ResourcesPage() {
         </div>
       </div>
       <p className="text-muted mb-4">
-        {data.totalResources.toLocaleString()} unique resources from {data.serversOnline.toLocaleString()} online servers
+        <AnimatedCounter value={data.totalResources} className="text-white" /> unique resources from <AnimatedCounter value={data.serversOnline} className="text-white" /> online servers
       </p>
 
       {/* Progress Status */}
@@ -54,18 +55,13 @@ export default function ResourcesPage() {
         <div>
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-muted">
-              IP Collection: {data.serversWithIp.toLocaleString()} / {data.totalServers.toLocaleString()} servers
+              IP Collection: <AnimatedCounter value={data.serversWithIp} className="text-white" /> / <AnimatedCounter value={data.totalServers} className="text-white" /> servers
             </span>
-            <span className="text-sm text-white">{data.ipProgress}%</span>
+            <span className="text-sm text-white"><AnimatedCounter value={data.ipProgress} />%</span>
           </div>
-          <div className="h-2 bg-bg rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 transition-all duration-300"
-              style={{ width: `${data.ipProgress}%` }}
-            />
-          </div>
+          <AnimatedProgress value={data.ipProgress} barClassName="h-full bg-blue-500" />
           {data.pendingIpFetch > 0 && (
-            <p className="text-xs text-muted mt-1">{data.pendingIpFetch.toLocaleString()} pending</p>
+            <p className="text-xs text-muted mt-1"><AnimatedCounter value={data.pendingIpFetch} /> pending</p>
           )}
         </div>
 
@@ -73,19 +69,14 @@ export default function ResourcesPage() {
         <div>
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-muted">
-              Resource Scan: {data.serversScanned.toLocaleString()} scanned
+              Resource Scan: <AnimatedCounter value={data.serversScanned} className="text-white" /> scanned
             </span>
-            <span className="text-sm text-white">{data.scanProgress}%</span>
+            <span className="text-sm text-white"><AnimatedCounter value={data.scanProgress} />%</span>
           </div>
-          <div className="h-2 bg-bg rounded-full overflow-hidden">
-            <div
-              className="h-full bg-accent transition-all duration-300"
-              style={{ width: `${data.scanProgress}%` }}
-            />
-          </div>
+          <AnimatedProgress value={data.scanProgress} barClassName="h-full bg-accent" />
           <p className="text-xs text-muted mt-1">
-            {data.serversOnline.toLocaleString()} online
-            {data.pendingScan > 0 && ` • ${data.pendingScan.toLocaleString()} pending`}
+            <AnimatedCounter value={data.serversOnline} className="text-green-400" /> online
+            {data.pendingScan > 0 && <> • <AnimatedCounter value={data.pendingScan} /> pending</>}
           </p>
         </div>
 
@@ -93,7 +84,7 @@ export default function ResourcesPage() {
         {data.ipProgress >= 100 && data.scanProgress >= 100 && (
           <div className="pt-2 border-t border-border">
             <p className="text-sm text-green-400">
-              All {data.totalServers.toLocaleString()} servers processed
+              All <AnimatedCounter value={data.totalServers} /> servers processed
             </p>
           </div>
         )}
