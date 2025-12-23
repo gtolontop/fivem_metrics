@@ -143,6 +143,80 @@ export async function initializeQueues(serverIds: string[]): Promise<{ added: nu
 }
 
 /**
+ * FAST: Initialize queues with direct IPs from protobuf
+ * Stores ~89% of IPs instantly without API calls!
+ * Only servers with URLs need resolution via API
+ */
+export async function initializeQueuesWithDirectIps(
+  serverIds: string[],
+  directIps: Map<string, string>,
+  needsResolution: string[]
+): Promise<{ directIpsStored: number, needsApiFetch: number, queuedForScan: number }> {
+  if (!redis) return { directIpsStored: 0, needsApiFetch: 0, queuedForScan: 0 }
+
+  const now = Date.now().toString()
+  console.log(`[FastInit] Starting with ${directIps.size} direct IPs, ${needsResolution.length} need resolution`)
+
+  // Add all servers to global set
+  if (serverIds.length > 0) {
+    await redis.sadd(SET_ALL_SERVERS, ...serverIds)
+  }
+
+  // Store all direct IPs immediately
+  if (directIps.size > 0) {
+    const pipeline = redis.pipeline()
+
+    // Store IPs in batches
+    const entries = Array.from(directIps.entries())
+    for (let i = 0; i < entries.length; i += 500) {
+      const batch = entries.slice(i, i + 500)
+      for (const [serverId, ip] of batch) {
+        pipeline.hset(DATA_IPS, serverId, ip)
+        pipeline.hset(TS_IP_FETCH, serverId, now)
+      }
+    }
+
+    await pipeline.exec()
+    console.log(`[FastInit] Stored ${directIps.size} direct IPs`)
+  }
+
+  // Queue servers with direct IPs for scanning immediately
+  const serversWithIps = Array.from(directIps.keys())
+  if (serversWithIps.length > 0) {
+    const pipeline = redis.pipeline()
+    pipeline.del(QUEUE_SCAN)
+
+    for (let i = 0; i < serversWithIps.length; i += 1000) {
+      const batch = serversWithIps.slice(i, i + 1000)
+      pipeline.rpush(QUEUE_SCAN, ...batch)
+    }
+
+    await pipeline.exec()
+    console.log(`[FastInit] Queued ${serversWithIps.length} servers for immediate scan`)
+  }
+
+  // Queue only servers that need URL resolution for IP fetch
+  if (needsResolution.length > 0) {
+    const pipeline = redis.pipeline()
+    pipeline.del(QUEUE_IP_FETCH)
+
+    for (let i = 0; i < needsResolution.length; i += 1000) {
+      const batch = needsResolution.slice(i, i + 1000)
+      pipeline.rpush(QUEUE_IP_FETCH, ...batch)
+    }
+
+    await pipeline.exec()
+    console.log(`[FastInit] Queued ${needsResolution.length} servers for IP resolution (URLs only)`)
+  }
+
+  return {
+    directIpsStored: directIps.size,
+    needsApiFetch: needsResolution.length,
+    queuedForScan: serversWithIps.length
+  }
+}
+
+/**
  * Ajoute les serveurs avec IP à la queue de scan
  */
 export async function queueServersForScan(): Promise<number> {

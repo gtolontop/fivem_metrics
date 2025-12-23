@@ -1,10 +1,11 @@
 /**
  * Auto-initialization - tout se lance automatiquement
+ * Uses FAST protobuf IP extraction (~89% direct IPs)
  */
 
-import { getServersDirect } from './fivem'
+import { getServersWithIps } from './fivem'
 import { getCache, updateServers } from './cache'
-import { initializeQueues, queueServersForScan, isQueueEnabled, getQueueStats } from './queue'
+import { initializeQueuesWithDirectIps, queueServersForScan, isQueueEnabled, getQueueStats } from './queue'
 import { startBackgroundScanner } from './background-scan'
 import { startBackgroundIpFetcher } from './background-ip'
 
@@ -34,40 +35,39 @@ export async function autoInit(): Promise<{ success: boolean, message: string, s
   initializing = true
 
   try {
-    console.log('[Auto-Init] Starting...')
+    console.log('[Auto-Init] Starting with FAST IP extraction...')
 
-    // 1. Charger les serveurs FiveM
-    const cache = getCache()
-    if (cache.servers.length === 0) {
-      console.log('[Auto-Init] Loading servers from FiveM...')
-      const { servers, totalPlayers, totalServers } = await getServersDirect()
-      if (servers.length > 0) {
-        updateServers(servers, totalPlayers, totalServers)
-        console.log(`[Auto-Init] Loaded ${servers.length} servers`)
-      } else {
-        return { success: false, message: 'Failed to load servers from FiveM' }
-      }
+    // 1. Load servers WITH direct IPs from protobuf (instant!)
+    console.log('[Auto-Init] Loading servers from FiveM protobuf...')
+    const { servers, directIps, needsResolution, totalPlayers, totalServers } = await getServersWithIps()
+
+    if (servers.length === 0) {
+      return { success: false, message: 'Failed to load servers from FiveM' }
     }
 
-    // 2. Initialiser les queues
-    console.log('[Auto-Init] Initializing queues...')
-    const serverIds = getCache().servers.map(s => s.id)
-    const { added, skipped } = await initializeQueues(serverIds)
-    console.log(`[Auto-Init] Queued ${added} for IP fetch, ${skipped} already have IP`)
+    updateServers(servers, totalPlayers, totalServers)
+    console.log(`[Auto-Init] Loaded ${servers.length} servers`)
+    console.log(`[Auto-Init] Got ${directIps.size} direct IPs instantly! (${(directIps.size / servers.length * 100).toFixed(1)}%)`)
+    console.log(`[Auto-Init] Only ${needsResolution.length} need API resolution (${(needsResolution.length / servers.length * 100).toFixed(1)}%)`)
 
-    // 3. Queue les serveurs avec IP pour scan
-    const scanQueued = await queueServersForScan()
-    console.log(`[Auto-Init] Queued ${scanQueued} for scan`)
+    // 2. Initialize queues with direct IPs (FAST path)
+    console.log('[Auto-Init] Storing direct IPs and queuing for scan...')
+    const serverIds = servers.map(s => s.id)
+    const { directIpsStored, needsApiFetch, queuedForScan } = await initializeQueuesWithDirectIps(
+      serverIds,
+      directIps,
+      needsResolution
+    )
 
     initialized = true
     lastInitTime = now
 
-    // 4. Start background workers (Railway only)
+    // 3. Start background workers (Railway only)
     if (!workersStarted) {
-      startBackgroundIpFetcher()  // Fetch IPs from FiveM API
+      startBackgroundIpFetcher()  // Only for URL resolution (~11% of servers)
       startBackgroundScanner()     // Scan servers for resources
       workersStarted = true
-      console.log('[Auto-Init] Background workers started (IP fetcher + scanner)')
+      console.log('[Auto-Init] Background workers started (IP fetcher for URLs + scanner)')
     }
 
     const stats = await getQueueStats()
@@ -75,7 +75,7 @@ export async function autoInit(): Promise<{ success: boolean, message: string, s
 
     return {
       success: true,
-      message: `Initialized: ${added} to fetch, ${skipped} have IP, ${scanQueued} to scan`,
+      message: `FAST: ${directIpsStored} IPs instant, ${needsApiFetch} need API, ${queuedForScan} ready to scan`,
       stats
     }
 

@@ -8,6 +8,7 @@ export interface FiveMServer {
   resources: string[]
   vars: Record<string, string>
   icon: string | null
+  connectEndpoint: string | null  // Direct IP:port or URL from protobuf field 18
 }
 
 export interface FiveMResource {
@@ -16,17 +17,21 @@ export interface FiveMResource {
   players: number
 }
 
-// Protobuf varint decoder
+// Protobuf varint decoder - supports up to 64-bit (10 bytes for negative numbers)
 function readVarint(buf: Uint8Array, offset: number): [number, number] {
   let result = 0
   let shift = 0
   let pos = offset
   while (pos < buf.length) {
     const byte = buf[pos++]
-    result |= (byte & 0x7f) << shift
+    // Only use lower 32 bits to avoid JS number precision issues
+    if (shift < 32) {
+      result |= (byte & 0x7f) << shift
+    }
     if ((byte & 0x80) === 0) break
     shift += 7
-    if (shift > 35) break
+    // Allow up to 10 bytes (64-bit varint) - important for negative numbers!
+    if (shift > 63) break
   }
   return [result, pos]
 }
@@ -79,6 +84,7 @@ function parseServerMessage(data: Uint8Array): FiveMServer | null {
   const resources: string[] = []
   let icon: string | null = null
   const vars: Record<string, string> = {}
+  let connectEndpoint: string | null = null
 
   while (pos < data.length - 1) {
     try {
@@ -98,7 +104,7 @@ function parseServerMessage(data: Uint8Array): FiveMServer | null {
         const fieldData = data.slice(pos, pos + len)
 
         if (fieldNum === 1) {
-          // EndPoint
+          // EndPoint (CFX ID like "xjz9k5")
           endpoint = new TextDecoder().decode(fieldData)
         } else if (fieldNum === 2) {
           // Data message - parse nested
@@ -113,6 +119,8 @@ function parseServerMessage(data: Uint8Array): FiveMServer | null {
           }
           icon = nested.icon || icon
           Object.assign(vars, nested.vars)
+          // Field 18 from nested message - direct IP:port or URL
+          connectEndpoint = nested.connectEndpoint
         }
 
         pos += len
@@ -145,7 +153,8 @@ function parseServerMessage(data: Uint8Array): FiveMServer | null {
     mapname,
     resources,
     vars,
-    icon
+    icon,
+    connectEndpoint
   }
 }
 
@@ -158,6 +167,7 @@ function parseDataMessage(data: Uint8Array): {
   resources: string[]
   icon: string | null
   vars: Record<string, string>
+  connectEndpoint: string | null  // Field 18 - direct IP or URL
 } {
   let pos = 0
   let hostname = ''
@@ -168,6 +178,7 @@ function parseDataMessage(data: Uint8Array): {
   const resources: string[] = []
   let icon: string | null = null
   const vars: Record<string, string> = {}
+  let connectEndpoint: string | null = null
 
   while (pos < data.length - 1) {
     try {
@@ -214,6 +225,9 @@ function parseDataMessage(data: Uint8Array): {
             if (iconStr.startsWith('data:image')) {
               icon = iconStr
             }
+          } else if (fieldNum === 18) {
+            // Connect endpoint - direct IP:port or URL
+            connectEndpoint = new TextDecoder().decode(fieldData)
           }
         } catch {
           // Skip invalid text
@@ -239,7 +253,7 @@ function parseDataMessage(data: Uint8Array): {
     }
   }
 
-  return { hostname, clients, maxClients, gametype, mapname, resources, icon, vars }
+  return { hostname, clients, maxClients, gametype, mapname, resources, icon, vars, connectEndpoint }
 }
 
 function parseVarEntry(data: Uint8Array): { key: string; value: string } | null {
@@ -455,5 +469,89 @@ export async function getServersDirect(): Promise<{
   } catch (e) {
     console.error('Failed to fetch FiveM data:', e)
     return { servers: [], resources: [], totalPlayers: 0, totalServers: 0 }
+  }
+}
+
+// Helper to check if a string is a direct IP:port
+function isDirectIp(endpoint: string): boolean {
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(endpoint)
+}
+
+// Extract direct IPs from protobuf - INSTANT, no API calls needed!
+export async function getServersWithIps(): Promise<{
+  servers: FiveMServerSlim[]
+  directIps: Map<string, string>  // cfxId -> IP:port (89% of servers)
+  needsResolution: string[]       // cfxIds with URLs that need DNS/API lookup (11%)
+  totalPlayers: number
+  totalServers: number
+}> {
+  try {
+    const res = await fetch('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      redirect: 'follow',
+      cache: 'no-store',
+    })
+
+    if (!res.ok) {
+      console.error('FiveM API error:', res.status)
+      return { servers: [], directIps: new Map(), needsResolution: [], totalPlayers: 0, totalServers: 0 }
+    }
+
+    const buffer = await res.arrayBuffer()
+    console.log('[FastIP] Received', buffer.byteLength, 'bytes')
+
+    const allServers = parseServers(buffer)
+    console.log('[FastIP] Parsed', allServers.length, 'servers')
+
+    // Extract IPs from field 18
+    const directIps = new Map<string, string>()
+    const needsResolution: string[] = []
+    let totalPlayers = 0
+
+    for (const server of allServers) {
+      totalPlayers += server.players
+
+      if (server.connectEndpoint) {
+        if (isDirectIp(server.connectEndpoint)) {
+          // Direct IP - can use immediately!
+          directIps.set(server.id, server.connectEndpoint)
+        } else {
+          // URL - needs DNS resolution or API call
+          needsResolution.push(server.id)
+        }
+      } else {
+        // No endpoint at all - needs API call
+        needsResolution.push(server.id)
+      }
+    }
+
+    // Sort by players
+    allServers.sort((a, b) => b.players - a.players)
+
+    const cleanServers: FiveMServerSlim[] = allServers.map(s => ({
+      id: String(s.id || '').slice(0, 50),
+      name: stripColorCodes(String(s.name || '')).slice(0, 100),
+      players: Number(s.players) || 0,
+      maxPlayers: Number(s.maxPlayers) || 32,
+      gametype: String(s.gametype || '').slice(0, 50),
+      mapname: String(s.mapname || '').slice(0, 50),
+      tags: String(s.vars?.tags || '').slice(0, 200)
+    }))
+
+    console.log('[FastIP] Direct IPs:', directIps.size, `(${(directIps.size / allServers.length * 100).toFixed(1)}%)`)
+    console.log('[FastIP] Need resolution:', needsResolution.length, `(${(needsResolution.length / allServers.length * 100).toFixed(1)}%)`)
+
+    return {
+      servers: cleanServers,
+      directIps,
+      needsResolution,
+      totalPlayers,
+      totalServers: cleanServers.length
+    }
+  } catch (e) {
+    console.error('Failed to fetch FiveM data:', e)
+    return { servers: [], directIps: new Map(), needsResolution: [], totalPlayers: 0, totalServers: 0 }
   }
 }
