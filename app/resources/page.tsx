@@ -1,50 +1,14 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Search, Server, Users } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Search, Server, Users, Wifi, WifiOff } from 'lucide-react'
 import Link from 'next/link'
-import type { FiveMResource } from '@/lib/fivem'
-
-interface Data {
-  resources: FiveMResource[]
-  totalResources: number
-  serversScanned: number
-  serversWithIp: number
-  totalServers: number
-  serversOnline: number
-  pendingIpFetch: number
-  pendingScan: number
-  ipProgress: number
-  scanProgress: number
-}
+import { useRealtimeStats } from '@/lib/useRealtimeStats'
 
 export default function ResourcesPage() {
-  const [data, setData] = useState<Data | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { data, connected } = useRealtimeStats()
   const [search, setSearch] = useState('')
   const [limit, setLimit] = useState(100)
-
-  const fetchResources = useCallback(() => {
-    fetch('/api/resources')
-      .then(res => res.json())
-      .then(setData)
-      .finally(() => setLoading(false))
-  }, [])
-
-  useEffect(() => {
-    fetchResources()
-  }, [fetchResources])
-
-  // Auto-refresh data while collecting
-  useEffect(() => {
-    if (!data || (data.ipProgress >= 100 && data.scanProgress >= 100)) return
-
-    const timer = setInterval(() => {
-      fetchResources()
-    }, 10000) // Refresh every 10 seconds
-
-    return () => clearInterval(timer)
-  }, [data, fetchResources])
 
   const filtered = useMemo(() => {
     if (!data) return []
@@ -54,11 +18,11 @@ export default function ResourcesPage() {
       .slice(0, limit)
   }, [data, search, limit])
 
-  if (loading) {
+  if (!data) {
     return (
       <div className="max-w-6xl mx-auto px-6 py-12">
         <h1 className="text-3xl font-semibold mb-2">Resources</h1>
-        <p className="text-muted mb-8">Loading resources...</p>
+        <p className="text-muted mb-8">Connecting to real-time stream...</p>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[...Array(6)].map((_, i) => (
             <div key={i} className="bg-card border border-border rounded-xl p-5 animate-pulse">
@@ -73,65 +37,69 @@ export default function ResourcesPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-12">
-      <h1 className="text-3xl font-semibold mb-2">Resources</h1>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-3xl font-semibold">Resources</h1>
+        <div className={`flex items-center gap-2 text-sm ${connected ? 'text-green-400' : 'text-yellow-400'}`}>
+          {connected ? <Wifi size={16} /> : <WifiOff size={16} />}
+          <span>{connected ? 'Live' : 'Reconnecting...'}</span>
+        </div>
+      </div>
       <p className="text-muted mb-4">
-        {data?.totalResources.toLocaleString() || 0} unique resources from {data?.serversScanned || 0} / {data?.totalServers || 0} servers
+        {data.totalResources.toLocaleString()} unique resources from {data.serversOnline.toLocaleString()} online servers
       </p>
 
       {/* Progress Status */}
-      {data && (
-        <div className="bg-card border border-border rounded-xl p-4 mb-6 space-y-4">
-          {/* Phase 1: IP Collection */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-muted">
-                IP Collection: {data.serversWithIp.toLocaleString()} / {data.totalServers.toLocaleString()} servers
-              </span>
-              <span className="text-sm text-white">{data.ipProgress}%</span>
-            </div>
-            <div className="h-2 bg-bg rounded-full overflow-hidden">
-              <div
-                className="h-full bg-blue-500 transition-all duration-300"
-                style={{ width: `${data.ipProgress}%` }}
-              />
-            </div>
-            {data.pendingIpFetch > 0 && (
-              <p className="text-xs text-muted mt-1">{data.pendingIpFetch.toLocaleString()} pending</p>
-            )}
+      <div className="bg-card border border-border rounded-xl p-4 mb-6 space-y-4">
+        {/* Phase 1: IP Collection */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted">
+              IP Collection: {data.serversWithIp.toLocaleString()} / {data.totalServers.toLocaleString()} servers
+            </span>
+            <span className="text-sm text-white">{data.ipProgress}%</span>
           </div>
-
-          {/* Phase 2: Resource Scan */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-muted">
-                Resource Scan: {data.serversScanned.toLocaleString()} / {data.serversWithIp.toLocaleString()} servers with IP
-              </span>
-              <span className="text-sm text-white">{data.scanProgress}%</span>
-            </div>
-            <div className="h-2 bg-bg rounded-full overflow-hidden">
-              <div
-                className="h-full bg-accent transition-all duration-300"
-                style={{ width: `${data.scanProgress}%` }}
-              />
-            </div>
-            <p className="text-xs text-muted mt-1">
-              {data.serversOnline.toLocaleString()} online
-              {data.pendingScan > 0 && ` • ${data.pendingScan.toLocaleString()} pending`}
-            </p>
+          <div className="h-2 bg-bg rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 transition-all duration-300"
+              style={{ width: `${data.ipProgress}%` }}
+            />
           </div>
-
-          {/* Summary when both complete */}
-          {data.ipProgress >= 100 && data.scanProgress >= 100 && (
-            <div className="pt-2 border-t border-border">
-              <p className="text-sm text-green-400">
-                All {data.totalServers.toLocaleString()} servers processed
-              </p>
-            </div>
+          {data.pendingIpFetch > 0 && (
+            <p className="text-xs text-muted mt-1">{data.pendingIpFetch.toLocaleString()} pending</p>
           )}
         </div>
-      )}
 
-      {(!data || data.resources.length === 0) ? (
+        {/* Phase 2: Resource Scan */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted">
+              Resource Scan: {data.serversScanned.toLocaleString()} scanned
+            </span>
+            <span className="text-sm text-white">{data.scanProgress}%</span>
+          </div>
+          <div className="h-2 bg-bg rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent transition-all duration-300"
+              style={{ width: `${data.scanProgress}%` }}
+            />
+          </div>
+          <p className="text-xs text-muted mt-1">
+            {data.serversOnline.toLocaleString()} online
+            {data.pendingScan > 0 && ` • ${data.pendingScan.toLocaleString()} pending`}
+          </p>
+        </div>
+
+        {/* Summary when both complete */}
+        {data.ipProgress >= 100 && data.scanProgress >= 100 && (
+          <div className="pt-2 border-t border-border">
+            <p className="text-sm text-green-400">
+              All {data.totalServers.toLocaleString()} servers processed
+            </p>
+          </div>
+        )}
+      </div>
+
+      {data.resources.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-8 text-center">
           <p className="text-muted">No resources found yet. Scanning in progress...</p>
         </div>
