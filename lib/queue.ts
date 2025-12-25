@@ -16,7 +16,8 @@ const QUEUE_SCAN = 'queue:scan'                   // Serveurs à scanner (ont d�
 // Données permanentes (Hashes)
 const DATA_IPS = 'data:ips'                       // cfxId -> IP (permanent, toutes les IPs connues)
 const DATA_STATUS = 'data:server_status'          // cfxId -> 'online' | 'offline' | 'unavailable'
-const DATA_RESOURCES = 'data:resources'           // JSON des ressources agrégées
+const DATA_RESOURCES = 'data:resources'           // JSON des ressources agrégées (full list)
+const DATA_RESOURCES_TOP = 'data:resources_top'   // JSON des top 100 resources (lightweight for SSE)
 const DATA_SERVER_RESOURCES = 'data:server_resources' // cfxId -> JSON des resources du serveur
 const DATA_SERVER_PLAYERS = 'data:server_players' // cfxId -> real player count from protobuf
 
@@ -699,7 +700,14 @@ async function updateResourceAggregationFull(): Promise<void> {
       }))
       .sort((a, b) => b.servers - a.servers)
 
-    await redis.set(DATA_RESOURCES, JSON.stringify(resources))
+    // Save full list and top 100 separately (top 100 is lightweight for SSE)
+    const pipeline = redis.pipeline()
+    pipeline.set(DATA_RESOURCES, JSON.stringify(resources))
+    pipeline.set(DATA_RESOURCES_TOP, JSON.stringify({
+      resources: resources.slice(0, 100),
+      total: resources.length
+    }))
+    await pipeline.exec()
     console.log(`[Queue] Full aggregation: ${resources.length} resources`)
   } catch (e) {
     console.error('[Queue] Failed to update resource aggregation:', e)
@@ -780,12 +788,44 @@ export async function getAllIps(): Promise<Map<string, string>> {
   return new Map(Object.entries(data))
 }
 
-// In-memory cache for resources (5s TTL - short because updated frequently)
+// In-memory cache for top 100 resources (lightweight, for SSE)
+let resourcesTopCache: { resources: Array<{ name: string, servers: number, onlineServers: number, players: number }>, total: number, expires: number } | null = null
+const RESOURCES_TOP_CACHE_TTL = 2 * 1000 // 2 seconds
+
+/**
+ * FAST: Get only top 100 resources (lightweight for SSE)
+ * Uses separate Redis key with pre-sliced data
+ */
+export async function getResourcesTop(): Promise<{ resources: Array<{ name: string, servers: number, onlineServers: number, players: number }>, total: number }> {
+  if (!redis) return { resources: [], total: 0 }
+
+  // Check cache
+  if (resourcesTopCache && resourcesTopCache.expires > Date.now()) {
+    return { resources: resourcesTopCache.resources, total: resourcesTopCache.total }
+  }
+
+  try {
+    const data = await redis.get(DATA_RESOURCES_TOP)
+    if (!data) return { resources: [], total: 0 }
+
+    const parsed = JSON.parse(data) as { resources: Array<{ name: string, servers: number, onlineServers: number, players: number }>, total: number }
+
+    // Update cache
+    resourcesTopCache = { ...parsed, expires: Date.now() + RESOURCES_TOP_CACHE_TTL }
+
+    return parsed
+  } catch {
+    return { resources: [], total: 0 }
+  }
+}
+
+// In-memory cache for full resources (5s TTL - for search/pagination only)
 let resourcesCache: { data: Array<{ name: string, servers: number, onlineServers: number, players: number }>, expires: number } | null = null
 const RESOURCES_CACHE_TTL = 5 * 1000 // 5 seconds
 
 /**
- * Récupère les resources agrégées (cached)
+ * Récupère les resources agrégées (cached) - FULL LIST for search
+ * WARNING: This parses 800k+ resources JSON. Use getResourcesTop() for SSE.
  */
 export async function getResources(): Promise<Array<{ name: string, servers: number, onlineServers: number, players: number }>> {
   if (!redis) return []
@@ -1067,6 +1107,39 @@ export async function rebuildResourceIndex(): Promise<number> {
 
   console.log(`[Queue] Resource index rebuilt: ${totalResources} resources indexed`)
   return totalResources
+}
+
+/**
+ * Rebuild the top 100 resources cache (for migration)
+ * This regenerates DATA_RESOURCES_TOP from DATA_RESOURCES
+ */
+export async function rebuildResourcesTop(): Promise<number> {
+  if (!redis) return 0
+
+  console.log('[Queue] Rebuilding top 100 resources...')
+
+  try {
+    const data = await redis.get(DATA_RESOURCES)
+    if (!data) {
+      console.log('[Queue] No resources data found, running full aggregation...')
+      await updateResourceAggregationFull()
+      return 100
+    }
+
+    const resources = JSON.parse(data) as Array<{ name: string, servers: number, onlineServers: number, players: number }>
+
+    // Save top 100 separately
+    await redis.set(DATA_RESOURCES_TOP, JSON.stringify({
+      resources: resources.slice(0, 100),
+      total: resources.length
+    }))
+
+    console.log(`[Queue] Top 100 rebuilt from ${resources.length} total resources`)
+    return resources.length
+  } catch (e) {
+    console.error('[Queue] Failed to rebuild top 100:', e)
+    return 0
+  }
 }
 
 export function isQueueEnabled(): boolean {

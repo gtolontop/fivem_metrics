@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { syncCountersFromData, rebuildResourceIndex, isQueueEnabled } from '@/lib/queue'
+import { syncCountersFromData, rebuildResourceIndex, rebuildResourcesTop, isQueueEnabled } from '@/lib/queue'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,12 +24,16 @@ export async function GET() {
     // Rebuild resource index
     const resourceCount = await rebuildResourceIndex()
 
+    // Rebuild top 100 resources cache (for fast SSE)
+    const totalResources = await rebuildResourcesTop()
+
     console.log('[Migrate] Migration complete!')
 
     return NextResponse.json({
       success: true,
       counters,
-      resourcesIndexed: resourceCount
+      resourcesIndexed: resourceCount,
+      totalResources
     })
   } catch (error) {
     console.error('[Migrate] Error:', error)
