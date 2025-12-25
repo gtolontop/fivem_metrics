@@ -1,10 +1,10 @@
-import { getResources, getQueueStats, isQueueEnabled } from '@/lib/queue'
+import { getResourcesTop, getQueueStats, isQueueEnabled } from '@/lib/queue'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 // SSE endpoint for real-time stats updates
-// Sends: stats every 2s, resources every 10s (to avoid huge payloads)
+// OPTIMIZED: Uses getResourcesTop() which reads pre-sliced top 100 (not 800k JSON)
 export async function GET() {
   if (!isQueueEnabled()) {
     return new Response('Redis not configured', { status: 503 })
@@ -53,18 +53,18 @@ export async function GET() {
         }
       }
 
-      // Send resources (only TOP 100 for perf, every 10s)
+      // Send resources (FAST - uses pre-sliced top 100 from Redis)
       const sendResources = async () => {
         if (isClosed) return
 
         try {
-          const resources = await getResources()
-          lastResourceCount = resources.length
+          const { resources, total } = await getResourcesTop()
+          lastResourceCount = total
 
           const data = {
             type: 'resources',
-            resources: resources.slice(0, 100),  // Only top 100 for SSE
-            totalResources: resources.length,
+            resources,  // Already top 100, no slicing needed
+            totalResources: total,
             timestamp: Date.now()
           }
 
