@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getCache } from '@/lib/cache'
+import { getServersByIds } from '@/lib/cache'
 import { getServersWithResource, getQueueStats, getResources, isQueueEnabled } from '@/lib/queue'
 
 export const dynamic = 'force-dynamic'
@@ -30,7 +30,6 @@ export async function GET(
     }, { status: 503 })
   }
 
-  const cache = getCache()
   const [serverIds, stats, allResources] = await Promise.all([
     getServersWithResource(resourceName),
     getQueueStats(),
@@ -65,20 +64,16 @@ export async function GET(
     })
   }
 
-  // Get server details from cache
-  const serversWithResource = serverIds
-    .map(serverId => {
-      const server = cache.servers.find(s => s.id === serverId)
-      if (!server) return null
-      return {
-        id: server.id,
-        name: server.name,
-        players: server.players,
-        maxPlayers: server.maxPlayers,
-        gametype: server.gametype
-      }
-    })
-    .filter((s): s is NonNullable<typeof s> => s !== null)
+  // Get server details from cache using O(1) Map lookup
+  const servers = getServersByIds(serverIds)
+  const serversWithResource = servers
+    .map(server => ({
+      id: server.id,
+      name: server.name,
+      players: server.players,
+      maxPlayers: server.maxPlayers,
+      gametype: server.gametype
+    }))
     .sort((a, b) => b.players - a.players)
 
   const totalPlayers = serversWithResource.reduce((sum, s) => sum + s.players, 0)

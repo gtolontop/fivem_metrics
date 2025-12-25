@@ -33,6 +33,15 @@ const SET_PROCESSING = 'set:processing'           // Serveurs en cours de traite
 const STATS_KEY = 'stats:global'
 const STATS_TOTAL_SERVERS = 'stats:total_servers'  // Fixed total from last init
 
+// Performance counters (incremented atomically, avoid hgetall)
+const COUNTER_ONLINE = 'counter:online'
+const COUNTER_OFFLINE = 'counter:offline'
+const COUNTER_UNAVAILABLE = 'counter:unavailable'
+
+// Resource index (Set per resource for O(1) lookup)
+// Key format: resource:index:{resourceName} -> Set of serverIds
+const RESOURCE_INDEX_PREFIX = 'resource:index:'
+
 // ============================================================================
 // CONFIG
 // ============================================================================
@@ -505,26 +514,47 @@ export async function submitIpResults(results: IpResult[]): Promise<{ success: n
 
 /**
  * Soumet les résultats de scan
+ * Uses incremental counter updates for O(1) stats instead of O(n) hgetall
  */
 export async function submitScanResults(results: ScanResult[]): Promise<{ online: number, offline: number, error: number }> {
   if (!redis || results.length === 0) return { online: 0, offline: 0, error: 0 }
 
   const now = Date.now().toString()
+
+  // First, get previous statuses for these servers to update counters correctly
+  const serverIds = results.map(r => r.serverId)
+  const previousStatuses = await redis.hmget(DATA_STATUS, ...serverIds)
+
   const pipeline = redis.pipeline()
 
   let online = 0
   let offline = 0
   let error = 0
 
-  for (const result of results) {
+  // Track counter changes
+  let onlineDelta = 0
+  let offlineDelta = 0
+  let unavailableDelta = 0
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i]
+    const previousStatus = previousStatuses[i] as ServerStatus | null
+
     // Retirer du processing
     pipeline.hdel(SET_PROCESSING, result.serverId)
     pipeline.hset(TS_SCAN, result.serverId, now)
+
+    // Calculate counter deltas based on status change
+    if (previousStatus === 'online') onlineDelta--
+    else if (previousStatus === 'offline') offlineDelta--
+    else if (previousStatus === 'unavailable') unavailableDelta--
 
     if (result.online) {
       // Server responded with info.json = ONLINE
       pipeline.hset(DATA_STATUS, result.serverId, 'online')
       pipeline.hset(TS_LAST_SEEN, result.serverId, now)
+      onlineDelta++
+      online++
 
       // Stocker les resources du serveur
       if (result.resources && result.resources.length > 0) {
@@ -533,30 +563,95 @@ export async function submitScanResults(results: ScanResult[]): Promise<{ online
           players: result.players || 0
         }))
       }
-      online++
     } else {
       // Server didn't respond (timeout, connection refused, etc) = OFFLINE
       pipeline.hset(DATA_STATUS, result.serverId, 'offline')
+      offlineDelta++
       offline++
     }
   }
 
+  // Update counters atomically
+  if (onlineDelta !== 0) pipeline.incrby(COUNTER_ONLINE, onlineDelta)
+  if (offlineDelta !== 0) pipeline.incrby(COUNTER_OFFLINE, offlineDelta)
+  if (unavailableDelta !== 0) pipeline.incrby(COUNTER_UNAVAILABLE, unavailableDelta)
+
   await pipeline.exec()
 
-  // Mettre à jour l'agrégation des resources
-  await updateResourceAggregation()
+  // Update resource aggregation incrementally
+  await updateResourceAggregationIncremental(results.filter(r => r.online && r.resources))
 
   console.log(`[Queue] Scan results: ${online} online, ${offline} offline, ${error} errors`)
   return { online, offline, error }
 }
 
 /**
- * Met à jour l'agrégation des resources (appelé après chaque batch de scan)
- * Uses REAL player counts from protobuf (DATA_SERVER_PLAYERS), not sv_maxClients from scan
- * Counts ALL scanned servers (online + offline) for stable stats like 5metrics
+ * INCREMENTAL resource aggregation - only updates changed servers
+ * Much faster than full rebuild for each batch
  */
-async function updateResourceAggregation(): Promise<void> {
+async function updateResourceAggregationIncremental(onlineResults: ScanResult[]): Promise<void> {
+  if (!redis || onlineResults.length === 0) return
+
+  try {
+    const pipeline = redis.pipeline()
+
+    // Get real player counts for these servers
+    const serverIds = onlineResults.map(r => r.serverId)
+    const playerCounts = await redis.hmget(DATA_SERVER_PLAYERS, ...serverIds)
+
+    // Update resource index for each server
+    for (let i = 0; i < onlineResults.length; i++) {
+      const result = onlineResults[i]
+      if (!result.resources) continue
+
+      const realPlayers = playerCounts[i] ? parseInt(playerCounts[i]!) : 0
+
+      for (const resourceName of result.resources) {
+        if (!resourceName || resourceName.length < 2) continue
+        // Add server to resource index (Set ensures no duplicates)
+        pipeline.sadd(`${RESOURCE_INDEX_PREFIX}${resourceName}`, result.serverId)
+      }
+    }
+
+    await pipeline.exec()
+
+    // Debounce full aggregation rebuild (only every 5 seconds max)
+    await debouncedFullAggregation()
+  } catch (e) {
+    console.error('[Queue] Failed incremental resource update:', e)
+  }
+}
+
+// Debounce mechanism for full aggregation
+let aggregationTimeout: ReturnType<typeof setTimeout> | null = null
+let lastAggregation = 0
+const AGGREGATION_DEBOUNCE_MS = 5000 // 5 seconds
+
+async function debouncedFullAggregation(): Promise<void> {
+  const now = Date.now()
+
+  // If recently aggregated, skip
+  if (now - lastAggregation < AGGREGATION_DEBOUNCE_MS) {
+    // Schedule one for later if not already scheduled
+    if (!aggregationTimeout) {
+      aggregationTimeout = setTimeout(async () => {
+        aggregationTimeout = null
+        await updateResourceAggregationFull()
+      }, AGGREGATION_DEBOUNCE_MS)
+    }
+    return
+  }
+
+  await updateResourceAggregationFull()
+}
+
+/**
+ * FULL resource aggregation rebuild
+ * Called on init and periodically (debounced) during scanning
+ */
+async function updateResourceAggregationFull(): Promise<void> {
   if (!redis) return
+  lastAggregation = Date.now()
 
   try {
     // Récupérer les resources, statuts ET vrais player counts du protobuf
@@ -605,6 +700,7 @@ async function updateResourceAggregation(): Promise<void> {
       .sort((a, b) => b.servers - a.servers)
 
     await redis.set(DATA_RESOURCES, JSON.stringify(resources))
+    console.log(`[Queue] Full aggregation: ${resources.length} resources`)
   } catch (e) {
     console.error('[Queue] Failed to update resource aggregation:', e)
   }
@@ -616,6 +712,7 @@ async function updateResourceAggregation(): Promise<void> {
 
 /**
  * Récupère les stats des queues
+ * OPTIMIZED: Uses O(1) counter reads instead of O(n) hgetall
  */
 export async function getQueueStats(): Promise<QueueStats> {
   if (!redis) {
@@ -636,38 +733,32 @@ export async function getQueueStats(): Promise<QueueStats> {
     pendingScan,
     storedTotal,
     totalWithIp,
-    statuses,
+    onlineCount,
+    offlineCount,
+    unavailableCount,
     processing
   ] = await Promise.all([
     redis.llen(QUEUE_IP_FETCH),
     redis.llen(QUEUE_SCAN),
-    redis.get(STATS_TOTAL_SERVERS),  // Use fixed total from last init
+    redis.get(STATS_TOTAL_SERVERS),
     redis.hlen(DATA_IPS),
-    redis.hgetall(DATA_STATUS),
+    redis.get(COUNTER_ONLINE),
+    redis.get(COUNTER_OFFLINE),
+    redis.get(COUNTER_UNAVAILABLE),
     redis.hlen(SET_PROCESSING)
   ])
 
   // Use stored total, fallback to counting IPs if not set
   const totalServers = storedTotal ? parseInt(storedTotal) : totalWithIp
 
-  let totalOnline = 0
-  let totalOffline = 0
-  let totalUnavailable = 0
-
-  for (const status of Object.values(statuses)) {
-    if (status === 'online') totalOnline++
-    else if (status === 'offline') totalOffline++
-    else if (status === 'unavailable') totalUnavailable++
-  }
-
   return {
     pendingIpFetch,
     pendingScan,
     totalServers,
     totalWithIp,
-    totalOnline,
-    totalOffline,
-    totalUnavailable,
+    totalOnline: onlineCount ? parseInt(onlineCount) : 0,
+    totalOffline: offlineCount ? parseInt(offlineCount) : 0,
+    totalUnavailable: unavailableCount ? parseInt(unavailableCount) : 0,
     processing
   }
 }
@@ -773,32 +864,30 @@ export async function getServerStatus(serverId: string): Promise<ServerStatus> {
 
 /**
  * Récupère les serveurs ONLINE qui ont une resource spécifique
+ * OPTIMIZED: Uses Redis Set index for O(1) lookup instead of O(n) scan
  */
 export async function getServersWithResource(resourceName: string): Promise<string[]> {
   if (!redis) return []
 
   try {
-    const [allServerResources, statuses] = await Promise.all([
-      redis.hgetall(DATA_SERVER_RESOURCES),
-      redis.hgetall(DATA_STATUS)
-    ])
-    const servers: string[] = []
+    // Get server IDs from index (O(1) lookup)
+    const indexedServers = await redis.smembers(`${RESOURCE_INDEX_PREFIX}${resourceName}`)
 
-    for (const [serverId, dataJson] of Object.entries(allServerResources)) {
-      // Ne retourner que les serveurs ONLINE
-      if (statuses[serverId] !== 'online') continue
+    if (indexedServers.length === 0) {
+      return []
+    }
 
-      try {
-        const data = JSON.parse(dataJson) as { resources: string[], players: number }
-        if (data.resources.includes(resourceName)) {
-          servers.push(serverId)
-        }
-      } catch {
-        // Ignore parse errors
+    // Filter to only online servers using batch lookup
+    const statuses = await redis.hmget(DATA_STATUS, ...indexedServers)
+    const onlineServers: string[] = []
+
+    for (let i = 0; i < indexedServers.length; i++) {
+      if (statuses[i] === 'online') {
+        onlineServers.push(indexedServers[i])
       }
     }
 
-    return servers
+    return onlineServers
   } catch {
     return []
   }
@@ -864,6 +953,7 @@ export async function resetQueues(): Promise<void> {
 export async function resetAll(): Promise<void> {
   if (!redis) return
 
+  // Delete static keys
   await redis.del(
     QUEUE_IP_FETCH,
     QUEUE_SCAN,
@@ -878,10 +968,105 @@ export async function resetAll(): Promise<void> {
     SET_ALL_SERVERS,
     SET_PROCESSING,
     STATS_KEY,
-    STATS_TOTAL_SERVERS
+    STATS_TOTAL_SERVERS,
+    COUNTER_ONLINE,
+    COUNTER_OFFLINE,
+    COUNTER_UNAVAILABLE
   )
 
+  // Delete all resource index keys
+  const indexKeys = await redis.keys(`${RESOURCE_INDEX_PREFIX}*`)
+  if (indexKeys.length > 0) {
+    await redis.del(...indexKeys)
+  }
+
   console.log('[Queue] ALL DATA RESET')
+}
+
+/**
+ * Sync counters from existing data (for migration)
+ * Call this once when deploying the counter update
+ */
+export async function syncCountersFromData(): Promise<{ online: number, offline: number, unavailable: number }> {
+  if (!redis) return { online: 0, offline: 0, unavailable: 0 }
+
+  console.log('[Queue] Syncing counters from existing data...')
+
+  const statuses = await redis.hgetall(DATA_STATUS)
+
+  let online = 0
+  let offline = 0
+  let unavailable = 0
+
+  for (const status of Object.values(statuses)) {
+    if (status === 'online') online++
+    else if (status === 'offline') offline++
+    else if (status === 'unavailable') unavailable++
+  }
+
+  // Set counters atomically
+  const pipeline = redis.pipeline()
+  pipeline.set(COUNTER_ONLINE, online.toString())
+  pipeline.set(COUNTER_OFFLINE, offline.toString())
+  pipeline.set(COUNTER_UNAVAILABLE, unavailable.toString())
+  await pipeline.exec()
+
+  console.log(`[Queue] Counters synced: ${online} online, ${offline} offline, ${unavailable} unavailable`)
+  return { online, offline, unavailable }
+}
+
+/**
+ * Rebuild resource index from existing data (for migration)
+ */
+export async function rebuildResourceIndex(): Promise<number> {
+  if (!redis) return 0
+
+  console.log('[Queue] Rebuilding resource index...')
+
+  // First, delete all existing index keys
+  const existingKeys = await redis.keys(`${RESOURCE_INDEX_PREFIX}*`)
+  if (existingKeys.length > 0) {
+    await redis.del(...existingKeys)
+  }
+
+  const allServerResources = await redis.hgetall(DATA_SERVER_RESOURCES)
+  const resourceServers = new Map<string, string[]>()
+
+  for (const [serverId, dataJson] of Object.entries(allServerResources)) {
+    try {
+      const data = JSON.parse(dataJson) as { resources: string[] }
+      for (const resourceName of data.resources) {
+        if (!resourceName || resourceName.length < 2) continue
+        if (!resourceServers.has(resourceName)) {
+          resourceServers.set(resourceName, [])
+        }
+        resourceServers.get(resourceName)!.push(serverId)
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  // Build index in batches
+  let totalResources = 0
+  const entries = Array.from(resourceServers.entries())
+
+  for (let i = 0; i < entries.length; i += 100) {
+    const batch = entries.slice(i, i + 100)
+    const pipeline = redis.pipeline()
+
+    for (const [resourceName, serverIds] of batch) {
+      if (serverIds.length > 0) {
+        pipeline.sadd(`${RESOURCE_INDEX_PREFIX}${resourceName}`, ...serverIds)
+        totalResources++
+      }
+    }
+
+    await pipeline.exec()
+  }
+
+  console.log(`[Queue] Resource index rebuilt: ${totalResources} resources indexed`)
+  return totalResources
 }
 
 export function isQueueEnabled(): boolean {
