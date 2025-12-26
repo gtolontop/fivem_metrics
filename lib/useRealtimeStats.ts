@@ -10,6 +10,7 @@ export interface RealtimeStats {
   serversWithIp: number
   totalServers: number
   serversOnline: number
+  totalPlayers: number
   pendingIpFetch: number
   pendingScan: number
   ipProgress: number
@@ -24,6 +25,7 @@ interface StatsMessage {
   serversWithIp: number
   totalServers: number
   serversOnline: number
+  totalPlayers: number
   pendingIpFetch: number
   pendingScan: number
   ipProgress: number
@@ -69,6 +71,7 @@ export function useRealtimeStats() {
             serversWithIp: prev?.serversWithIp ?? 0,
             totalServers: prev?.totalServers ?? 0,
             serversOnline: prev?.serversOnline ?? 0,
+            totalPlayers: prev?.totalPlayers ?? 0,
             pendingIpFetch: prev?.pendingIpFetch ?? 0,
             pendingScan: prev?.pendingScan ?? 0,
             ipProgress: prev?.ipProgress ?? 0,
@@ -84,6 +87,7 @@ export function useRealtimeStats() {
             serversWithIp: message.serversWithIp,
             totalServers: message.totalServers,
             serversOnline: message.serversOnline,
+            totalPlayers: message.totalPlayers,
             pendingIpFetch: message.pendingIpFetch,
             pendingScan: message.pendingScan,
             ipProgress: message.ipProgress,

@@ -1,8 +1,20 @@
 import { NextResponse } from 'next/server'
 import { getServersByIds } from '@/lib/cache'
 import { getServersWithResource, getQueueStats, getResources, isQueueEnabled } from '@/lib/queue'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
+
+// CORS headers for public API access
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+}
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders })
+}
 
 // Extract prefix from resource name (e.g., "qb-core" -> "qb-", "esx_society" -> "esx_")
 function extractPrefix(name: string): string | null {
@@ -18,6 +30,12 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ name: string }> }
 ) {
+  // Apply rate limiting
+  const rateLimit = applyRateLimit(request, RATE_LIMITS.api)
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const { name } = await params
   const resourceName = decodeURIComponent(name)
 
@@ -27,7 +45,10 @@ export async function GET(
       name: resourceName,
       servers: [],
       serverCount: 0
-    }, { status: 503 })
+    }, {
+      status: 503,
+      headers: { ...corsHeaders, ...rateLimit.headers }
+    })
   }
 
   const [serverIds, stats, allResources] = await Promise.all([
@@ -61,6 +82,8 @@ export async function GET(
       scanProgress: stats.totalWithIp > 0
         ? Math.round(((stats.totalOnline + stats.totalOffline + stats.totalUnavailable) / stats.totalWithIp) * 100)
         : 0
+    }, {
+      headers: { ...corsHeaders, ...rateLimit.headers }
     })
   }
 
@@ -90,5 +113,7 @@ export async function GET(
     scanProgress: stats.totalWithIp > 0
       ? Math.round((totalScanned / stats.totalWithIp) * 100)
       : 0
+  }, {
+    headers: { ...corsHeaders, ...rateLimit.headers }
   })
 }
