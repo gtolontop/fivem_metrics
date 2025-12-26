@@ -183,7 +183,7 @@ export default function ApiDocsPage() {
       {/* Base URL */}
       <div className="bg-bg rounded-xl p-4 mb-8">
         <p className="text-sm text-muted mb-1">Base URL</p>
-        <code className="text-lg font-mono">https://fivem-metrics.example.com/api</code>
+        <code className="text-lg font-mono">https://fivemmetrics-production.up.railway.app/api</code>
       </div>
 
       {/* Endpoints */}
@@ -219,7 +219,7 @@ export default function ApiDocsPage() {
   "total": 800000,
   "hasMore": true
 }`}
-        example="curl 'https://your-domain.com/api/resources/search?q=esx&limit=10'"
+        example="curl 'https://fivemmetrics-production.up.railway.app/api/resources/search?q=esx&limit=10'"
         liveTest
       />
 
@@ -240,7 +240,7 @@ export default function ApiDocsPage() {
   "relatedResources": [...],
   "scanProgress": 100
 }`}
-        example="curl 'https://your-domain.com/api/resource/es_extended'"
+        example="curl 'https://fivemmetrics-production.up.railway.app/api/resource/es_extended'"
         liveTest
       />
 
@@ -274,7 +274,7 @@ export default function ApiDocsPage() {
   "total": 32000,
   "hasMore": true
 }`}
-        example="curl 'https://your-domain.com/api/servers?q=roleplay&limit=20'"
+        example="curl 'https://fivemmetrics-production.up.railway.app/api/servers?q=roleplay&limit=20'"
         liveTest
       />
 
@@ -295,7 +295,7 @@ export default function ApiDocsPage() {
   "resources": ["es_extended", "esx_vehicleshop", ...],
   "vars": {"sv_projectName": "My Server", ...}
 }`}
-        example="curl 'https://your-domain.com/api/server/qpez35'"
+        example="curl 'https://fivemmetrics-production.up.railway.app/api/server/qpez35'"
         liveTest
       />
 
@@ -319,7 +319,7 @@ export default function ApiDocsPage() {
   "totalUnavailable": 2000,
   "processing": 0
 }`}
-        example="curl 'https://your-domain.com/api/queue/stats'"
+        example="curl 'https://fivemmetrics-production.up.railway.app/api/queue/stats'"
         liveTest
       />
 
@@ -403,7 +403,7 @@ eventSource.onerror = () => {
           <pre className="text-green-400">{`import requests
 
 # Search for ESX resources
-response = requests.get('https://your-domain.com/api/resources/search', params={
+response = requests.get('https://fivemmetrics-production.up.railway.app/api/resources/search', params={
     'q': 'esx',
     'limit': 10
 })
@@ -413,7 +413,7 @@ for resource in data['resources']:
     print(f"{resource['name']}: {resource['servers']} servers")
 
 # Get specific resource details
-response = requests.get('https://your-domain.com/api/resource/es_extended')
+response = requests.get('https://fivemmetrics-production.up.railway.app/api/resource/es_extended')
 resource = response.json()
 print(f"Servers using es_extended: {resource['serverCount']}")`}</pre>
         </div>
@@ -424,7 +424,7 @@ print(f"Servers using es_extended: {resource['serverCount']}")`}</pre>
         <h3 className="font-medium mb-4">Node.js</h3>
         <div className="bg-bg rounded-lg p-4 font-mono text-sm overflow-x-auto">
           <pre className="text-green-400">{`// Search resources
-const response = await fetch('https://your-domain.com/api/resources/search?q=esx&limit=10');
+const response = await fetch('https://fivemmetrics-production.up.railway.app/api/resources/search?q=esx&limit=10');
 const data = await response.json();
 
 console.log(\`Found \${data.total} resources\`);
@@ -435,7 +435,7 @@ data.resources.forEach(r => {
 // SSE streaming
 import EventSource from 'eventsource';
 
-const es = new EventSource('https://your-domain.com/api/stats/stream');
+const es = new EventSource('https://fivemmetrics-production.up.railway.app/api/stats/stream');
 es.onmessage = (event) => {
   const data = JSON.parse(event.data);
   console.log(\`Online: \${data.serversOnline} servers\`);
@@ -448,16 +448,16 @@ es.onmessage = (event) => {
         <h3 className="font-medium mb-4">cURL</h3>
         <div className="bg-bg rounded-lg p-4 font-mono text-sm overflow-x-auto">
           <pre className="text-green-400">{`# Search resources
-curl 'https://your-domain.com/api/resources/search?q=qb-core&limit=5'
+curl 'https://fivemmetrics-production.up.railway.app/api/resources/search?q=qb-core&limit=5'
 
 # Get resource details
-curl 'https://your-domain.com/api/resource/qb-core'
+curl 'https://fivemmetrics-production.up.railway.app/api/resource/qb-core'
 
 # Get server list
-curl 'https://your-domain.com/api/servers?limit=10'
+curl 'https://fivemmetrics-production.up.railway.app/api/servers?limit=10'
 
 # Stream real-time updates
-curl -N 'https://your-domain.com/api/stats/stream'`}</pre>
+curl -N 'https://fivemmetrics-production.up.railway.app/api/stats/stream'`}</pre>
         </div>
       </div>
 
