@@ -1,6 +1,6 @@
 'use client'
 
-import { Server, Users, Package, TrendingUp, Wifi, WifiOff } from 'lucide-react'
+import { Server, Users, Package, TrendingUp, Wifi, WifiOff, Code } from 'lucide-react'
 import Link from 'next/link'
 import { useRealtimeStats } from '@/lib/useRealtimeStats'
 import { AnimatedCounter } from '@/components/AnimatedCounter'
@@ -65,20 +65,20 @@ export default function Home() {
         </div>
         <div className="bg-card border border-border rounded-xl p-6">
           <div className="flex items-center gap-2 text-muted mb-3">
+            <Users size={18} />
+            <span className="text-sm">Players</span>
+          </div>
+          <p className="text-3xl font-semibold text-blue-400">
+            <AnimatedCounter value={data.totalPlayers} />
+          </p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-6">
+          <div className="flex items-center gap-2 text-muted mb-3">
             <Package size={18} />
             <span className="text-sm">Resources</span>
           </div>
           <p className="text-3xl font-semibold">
             <AnimatedCounter value={data.totalResources} />
-          </p>
-        </div>
-        <div className="bg-card border border-border rounded-xl p-6">
-          <div className="flex items-center gap-2 text-muted mb-3">
-            <Users size={18} />
-            <span className="text-sm">Scanned</span>
-          </div>
-          <p className="text-3xl font-semibold">
-            <AnimatedCounter value={data.serversScanned} />
           </p>
         </div>
       </div>
@@ -151,7 +151,7 @@ export default function Home() {
 
       {/* Quick Links */}
       <section>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Link
             href="/resources"
             className="bg-card border border-border rounded-xl p-6 hover:border-zinc-600 transition-colors group"
@@ -174,6 +174,18 @@ export default function Home() {
             </div>
             <p className="text-muted text-sm">
               Explore {data.serversOnline.toLocaleString()} online servers
+            </p>
+          </Link>
+          <Link
+            href="/api-docs"
+            className="bg-card border border-border rounded-xl p-6 hover:border-zinc-600 transition-colors group"
+          >
+            <div className="flex items-center gap-3 mb-2">
+              <Code size={24} className="text-yellow-400" />
+              <h3 className="text-lg font-medium group-hover:text-white transition-colors">Public API</h3>
+            </div>
+            <p className="text-muted text-sm">
+              Free API access with real-time SSE streaming
             </p>
           </Link>
         </div>

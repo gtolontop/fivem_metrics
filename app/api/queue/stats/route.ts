@@ -1,11 +1,32 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getQueueStats, isQueueEnabled } from '@/lib/queue'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+// CORS headers for public API access
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+}
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders })
+}
+
+export async function GET(request: NextRequest) {
+  // Apply rate limiting
+  const rateLimit = applyRateLimit(request, RATE_LIMITS.api)
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   if (!isQueueEnabled()) {
-    return NextResponse.json({ error: 'Redis not configured' }, { status: 503 })
+    return NextResponse.json({ error: 'Redis not configured' }, {
+      status: 503,
+      headers: { ...corsHeaders, ...rateLimit.headers }
+    })
   }
 
   const stats = await getQueueStats()
@@ -34,10 +55,10 @@ export async function GET() {
       scanProgress: `${scanProgress}%`
     },
     estimate: {
-      // Avec 50 workers à 150 IPs/min chacun = 7500 IPs/min
       minutesToCompleteIps: Math.ceil(stats.pendingIpFetch / 7500),
-      // Scan direct = ~200 serveurs/sec = 12000/min
       minutesToCompleteScan: Math.ceil(stats.pendingScan / 12000)
     }
+  }, {
+    headers: { ...corsHeaders, ...rateLimit.headers }
   })
 }

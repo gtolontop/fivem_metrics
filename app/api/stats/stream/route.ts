@@ -1,4 +1,5 @@
 import { getResourcesTop, getQueueStats, isQueueEnabled } from '@/lib/queue'
+import { getCache } from '@/lib/cache'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -24,6 +25,7 @@ export async function GET() {
 
         try {
           const stats = await getQueueStats()
+          const cache = getCache()
           const totalScanned = stats.totalOnline + stats.totalOffline + stats.totalUnavailable
           const totalToScan = totalScanned + stats.pendingScan
 
@@ -34,6 +36,7 @@ export async function GET() {
             serversWithIp: stats.totalWithIp,
             totalServers: stats.totalServers,
             serversOnline: stats.totalOnline,
+            totalPlayers: cache.totalPlayers,
             pendingIpFetch: stats.pendingIpFetch,
             pendingScan: stats.pendingScan,
             ipProgress: stats.totalServers > 0

@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCache, isCacheValid } from '@/lib/cache'
 import { getQueueStats, isQueueEnabled } from '@/lib/queue'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
+
+// CORS headers for public API access
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+}
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders })
+}
 
 /**
  * GET /api/servers - Paginated server list with pre-calculated stats
@@ -12,6 +24,12 @@ export const dynamic = 'force-dynamic'
  *   - q: search query (optional)
  */
 export async function GET(request: NextRequest) {
+  // Apply rate limiting
+  const rateLimit = applyRateLimit(request, RATE_LIMITS.api)
+  if (!rateLimit.allowed) {
+    return rateLimit.response
+  }
+
   const { searchParams } = new URL(request.url)
   const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 100)
   const offset = parseInt(searchParams.get('offset') || '0')
@@ -29,6 +47,8 @@ export async function GET(request: NextRequest) {
       hasMore: false,
       offset,
       limit
+    }, {
+      headers: { ...corsHeaders, ...rateLimit.headers }
     })
   }
 
@@ -59,5 +79,7 @@ export async function GET(request: NextRequest) {
     hasMore,
     offset,
     limit
+  }, {
+    headers: { ...corsHeaders, ...rateLimit.headers }
   })
 }
