@@ -47,6 +47,25 @@ export function useRealtimeStats() {
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const resourcesRef = useRef<FiveMResource[]>([])
+  const initialLoadDone = useRef(false)
+
+  // INSTANT: Fetch pre-computed snapshot on mount
+  useEffect(() => {
+    if (initialLoadDone.current) return
+    initialLoadDone.current = true
+
+    fetch('/api/snapshot')
+      .then(res => res.json())
+      .then((snapshot: RealtimeStats) => {
+        if (snapshot && snapshot.resources) {
+          resourcesRef.current = snapshot.resources
+          setData(snapshot)
+        }
+      })
+      .catch(err => {
+        console.error('[Snapshot] Failed to load:', err)
+      })
+  }, [])
 
   const connect = useCallback(() => {
     const eventSource = new EventSource('/api/stats/stream')
@@ -54,7 +73,6 @@ export function useRealtimeStats() {
     eventSource.onopen = () => {
       setConnected(true)
       setError(null)
-      console.log('[SSE] Connected')
     }
 
     eventSource.onmessage = (event) => {

@@ -20,6 +20,7 @@ const DATA_RESOURCES = 'data:resources'           // JSON des ressources agrég�
 const DATA_RESOURCES_TOP = 'data:resources_top'   // JSON des top 100 resources (lightweight for SSE)
 const DATA_SERVER_RESOURCES = 'data:server_resources' // cfxId -> JSON des resources du serveur
 const DATA_SERVER_PLAYERS = 'data:server_players' // cfxId -> real player count from protobuf
+const DATA_HOMEPAGE_SNAPSHOT = 'data:homepage_snapshot' // Pre-computed snapshot for instant page load
 
 // Timestamps (Hashes)
 const TS_IP_FETCH = 'ts:ip_fetch'                 // cfxId -> timestamp dernière récup IP
@@ -649,20 +650,40 @@ async function debouncedFullAggregation(): Promise<void> {
 /**
  * FULL resource aggregation rebuild
  * Called on init and periodically (debounced) during scanning
+ * Also updates the homepage snapshot for instant page load!
  */
 async function updateResourceAggregationFull(): Promise<void> {
   if (!redis) return
   lastAggregation = Date.now()
 
   try {
-    // Récupérer les resources, statuts ET vrais player counts du protobuf
-    const [allServerResources, statuses, realPlayerCounts] = await Promise.all([
+    // Récupérer les resources, statuts, player counts ET stats en parallèle
+    const [
+      allServerResources,
+      statuses,
+      realPlayerCounts,
+      pendingIpFetch,
+      pendingScan,
+      storedTotal,
+      totalWithIp,
+      onlineCount,
+      offlineCount,
+      unavailableCount
+    ] = await Promise.all([
       redis.hgetall(DATA_SERVER_RESOURCES),
       redis.hgetall(DATA_STATUS),
-      redis.hgetall(DATA_SERVER_PLAYERS)
+      redis.hgetall(DATA_SERVER_PLAYERS),
+      redis.llen(QUEUE_IP_FETCH),
+      redis.llen(QUEUE_SCAN),
+      redis.get(STATS_TOTAL_SERVERS),
+      redis.hlen(DATA_IPS),
+      redis.get(COUNTER_ONLINE),
+      redis.get(COUNTER_OFFLINE),
+      redis.get(COUNTER_UNAVAILABLE)
     ])
 
     const resourceMap = new Map<string, { servers: Set<string>, onlineServers: Set<string>, players: number }>()
+    let totalPlayers = 0
 
     for (const [serverId, dataJson] of Object.entries(allServerResources)) {
       // Compter TOUS les serveurs scannés (online + offline) pour stats stables
@@ -673,6 +694,10 @@ async function updateResourceAggregationFull(): Promise<void> {
         const data = JSON.parse(dataJson) as { resources: string[], players: number }
         // Use REAL player count from protobuf, only if online
         const realPlayers = isOnline && realPlayerCounts[serverId] ? parseInt(realPlayerCounts[serverId]) : 0
+
+        if (isOnline) {
+          totalPlayers += realPlayers
+        }
 
         for (const resourceName of data.resources) {
           if (!resourceName || resourceName.length < 2) continue
@@ -700,15 +725,51 @@ async function updateResourceAggregationFull(): Promise<void> {
       }))
       .sort((a, b) => b.servers - a.servers)
 
-    // Save full list and top 100 separately (top 100 is lightweight for SSE)
+    const top100 = resources.slice(0, 100)
+    const totalResources = resources.length
+
+    // Pre-compute all stats for instant page load
+    const totalServers = storedTotal ? parseInt(storedTotal) : totalWithIp
+    const serversOnline = onlineCount ? parseInt(onlineCount) : 0
+    const serversOffline = offlineCount ? parseInt(offlineCount) : 0
+    const serversUnavailable = unavailableCount ? parseInt(unavailableCount) : 0
+    const serversScanned = serversOnline + serversOffline + serversUnavailable
+    const totalToScan = serversScanned + pendingScan
+
+    // Pre-compute progress percentages
+    const ipProgress = totalServers > 0
+      ? Math.min(100, Math.round((totalWithIp / totalServers) * 100))
+      : 0
+    const scanProgress = totalToScan > 0
+      ? Math.min(100, Math.round((serversScanned / totalToScan) * 100))
+      : 0
+
+    // Build the complete homepage snapshot
+    const snapshot = {
+      resources: top100,
+      totalResources,
+      totalServers,
+      serversOnline,
+      serversScanned,
+      serversWithIp: totalWithIp,
+      totalPlayers,
+      pendingIpFetch,
+      pendingScan,
+      ipProgress,
+      scanProgress,
+      timestamp: Date.now()
+    }
+
+    // Save full list, top 100, AND snapshot in one pipeline
     const pipeline = redis.pipeline()
     pipeline.set(DATA_RESOURCES, JSON.stringify(resources))
     pipeline.set(DATA_RESOURCES_TOP, JSON.stringify({
-      resources: resources.slice(0, 100),
-      total: resources.length
+      resources: top100,
+      total: totalResources
     }))
+    pipeline.set(DATA_HOMEPAGE_SNAPSHOT, JSON.stringify(snapshot))
     await pipeline.exec()
-    console.log(`[Queue] Full aggregation: ${resources.length} resources`)
+    console.log(`[Queue] Full aggregation: ${resources.length} resources, snapshot updated`)
   } catch (e) {
     console.error('[Queue] Failed to update resource aggregation:', e)
   }
@@ -786,6 +847,52 @@ export async function getAllIps(): Promise<Map<string, string>> {
   if (!redis) return new Map()
   const data = await redis.hgetall(DATA_IPS)
   return new Map(Object.entries(data))
+}
+
+// In-memory cache for homepage snapshot (for instant load)
+let snapshotCache: { data: HomepageSnapshot, expires: number } | null = null
+const SNAPSHOT_CACHE_TTL = 1000 // 1 second (very short, always fresh)
+
+export interface HomepageSnapshot {
+  resources: Array<{ name: string, servers: number, onlineServers: number, players: number }>
+  totalResources: number
+  totalServers: number
+  serversOnline: number
+  serversScanned: number
+  serversWithIp: number
+  totalPlayers: number
+  pendingIpFetch: number
+  pendingScan: number
+  ipProgress: number
+  scanProgress: number
+  timestamp: number
+}
+
+/**
+ * INSTANT: Get pre-computed homepage snapshot
+ * Single Redis GET with all data - no calculations needed!
+ */
+export async function getHomepageSnapshot(): Promise<HomepageSnapshot | null> {
+  if (!redis) return null
+
+  // Check cache first
+  if (snapshotCache && snapshotCache.expires > Date.now()) {
+    return snapshotCache.data
+  }
+
+  try {
+    const data = await redis.get(DATA_HOMEPAGE_SNAPSHOT)
+    if (!data) return null
+
+    const snapshot = JSON.parse(data) as HomepageSnapshot
+
+    // Update cache
+    snapshotCache = { data: snapshot, expires: Date.now() + SNAPSHOT_CACHE_TTL }
+
+    return snapshot
+  } catch {
+    return null
+  }
 }
 
 // In-memory cache for top 100 resources (lightweight, for SSE)
